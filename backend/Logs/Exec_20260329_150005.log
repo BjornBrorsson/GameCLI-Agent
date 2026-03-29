@@ -1,0 +1,190 @@
+=== Execution Log — 2026-03-29 15:00:05 ===
+
+
+============================================================
+STEP 1  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:00:08.287] ACTION 1/1: click 83 835  — Click the Return button to close the map and resume gameplay
+[15:00:08.409]   [vision] attempt=0
+  [target] (83,835)→(83,835) no shift conf=1.00 ✓
+[15:00:08.411]   [exec] attempt=0  settle=0.50s  cmd=click 83 835  screen=(83,835)
+[15:00:10.137]   [result] attempt=0  screen=UNCHANGED  stable
+[15:00:10.246]   [vision] attempt=1
+  [target] (83,835)→(155,835) Δ(+72,+0) conf=0.88 ✓
+[15:00:10.248]   [exec] attempt=1  settle=0.55s  cmd=click 155 817  screen=(155,817)
+[15:00:11.981]   [result] attempt=1  screen=UNCHANGED  stable
+[15:00:12.085]   [vision] attempt=2
+  [target] (83,835)→(155,817) Δ(+72,-18) conf=0.86 ✓
+[15:00:12.086]   [exec] attempt=2  settle=0.60s  cmd=click 173 817  screen=(173,817)
+[15:00:13.833]   [result] attempt=2  screen=UNCHANGED  stable
+[15:00:13.929]   [vision] attempt=3
+  [target] (83,835)→(83,835) no shift conf=1.00 ✓
+[15:00:13.931]   [exec] attempt=3  settle=0.65s  cmd=click 65 835  screen=(65,835)
+[15:00:15.696]   [result] attempt=3  screen=UNCHANGED  stable
+[15:00:18.181]   [retry-assist] after 4 failed attempts on: click 83 835
+[15:00:18.182]   [retry-assist] LLM says: click 86 835 — The Return button is visible, but the previous coordinates were slightly off; adjusting to the center of the button.
+[15:00:18.306]   [vision] attempt=4
+  [target] (86,835)→(49,691) Δ(-37,-144) conf=0.75 ✓
+[15:00:18.308]   [exec] attempt=4  settle=0.70s  cmd=click 49 709  screen=(49,709)
+[15:00:20.069]   [result] attempt=4  screen=CHANGED  stable
+[15:00:20.070]   [OK] action 1 after 5 attempt(s)
+[15:00:20.161] STEP 1 SUMMARY: 1/1 succeeded, 0 failed, avg_attempts=5.0, max_attempts=5, overall_screen_change=yes
+[15:00:20.163] *** PAUSED — struggling: avg_attempts=5.0, max_attempts=5, failed=0 ***
+[15:00:28.466] *** RESUMED by user ***
+
+============================================================
+STEP 2  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:00:33.292] ACTION 1/2: drag 459 865 776 565  — Play the middle Strike card on the enemy
+[15:00:33.418]   [vision] attempt=0
+  [start] (459,865)→(459,865) no shift conf=0.99 ✓ ocr=skipped
+  [end] (776,565)→(776,565) no shift conf=0.99 ✓
+[15:00:33.420]   [exec] attempt=0  settle=0.50s  cmd=drag 459 865 776 565  screen=(459,865)->(776,565)
+[15:00:36.750]   [result] attempt=0  screen=CHANGED  stable
+[15:00:36.751]   [OK] action 1 after 1 attempt(s)
+[15:00:39.774]   [revalidate] confidence=0.49 → LLM update: 1 action(s)
+[15:00:39.774]     [1] drag 695 890 770 630 — Play the rightmost Strike card on the green Acid Slime
+[15:00:39.776] ACTION 2/2: drag 695 890 770 630  — Play the rightmost Strike card on the green Acid Slime
+[15:00:39.883]   [vision] attempt=0
+  [start] (695,890)→(695,890) no shift conf=1.00 ✓ ocr=skipped
+  [end] (770,630)→(770,630) no shift conf=1.00 ✓
+[15:00:39.887]   [exec] attempt=0  settle=0.50s  cmd=drag 695 890 770 630  screen=(695,890)->(770,630)
+[15:00:43.215]   [result] attempt=0  screen=CHANGED  stable
+[15:00:43.216]   [OK] action 2 after 1 attempt(s)
+[15:00:43.305] STEP 2 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 3  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:00:47.282] ACTION 1/1: drag 485 860 635 600  — Play Bash card on the left enemy to defeat it
+[15:00:47.405]   [vision] attempt=0
+  [start] (485,860)→(485,860) no shift conf=1.00 ✓ ocr=skipped
+  [end] (635,600)→(635,600) no shift conf=0.98 ✓
+[15:00:47.407]   [exec] attempt=0  settle=0.50s  cmd=drag 485 860 635 600  screen=(485,860)->(635,600)
+[15:00:50.735]   [result] attempt=0  screen=CHANGED  stable
+[15:00:50.736]   [OK] action 1 after 1 attempt(s)
+[15:00:50.828] STEP 3 SUMMARY: 1/1 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 4  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:00:54.957] ACTION 1/1: drag 485 850 780 600  — Play Bash card on the enemy with 15 health
+[15:00:55.080]   [vision] attempt=0
+  [start] (485,850)→(485,850) no shift conf=1.00 ✓ ocr=skipped
+  [end] (780,600)→(780,600) no shift conf=1.00 ✓
+[15:00:55.082]   [exec] attempt=0  settle=0.50s  cmd=drag 485 850 780 600  screen=(485,850)->(780,600)
+[15:00:58.386]   [result] attempt=0  screen=CHANGED  stable
+[15:00:58.387]   [OK] action 1 after 1 attempt(s)
+[15:00:58.456] STEP 4 SUMMARY: 1/1 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 5  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:01:02.564] ACTION 1/2: drag 485 860 770 600  — Play Bash card on the enemy with 15 health
+[15:01:02.685]   [vision] attempt=0
+  [start] (485,860)→(485,860) no shift conf=0.99 ✓ ocr=skipped
+  [end] (770,600)→(770,600) no shift conf=1.00 ✓
+[15:01:02.687]   [exec] attempt=0  settle=0.50s  cmd=drag 485 860 770 600  screen=(485,860)->(770,600)
+[15:01:05.993]   [result] attempt=0  screen=UNCHANGED  stable
+[15:01:06.502]   [vision] attempt=1
+  [start] (485,860)→(485,860) no shift conf=0.99 ✓ ocr=skipped
+  [end] (770,600)→(922,599) Δ(+152,-1) conf=0.63 ✓
+[15:01:06.504]   [exec] attempt=1  settle=0.55s  cmd=drag 485 860 922 581  screen=(485,860)->(922,581)
+[15:01:09.847]   [result] attempt=1  screen=CHANGED  stable
+[15:01:09.848]   [OK] action 1 after 2 attempt(s)
+[15:01:09.903]   [revalidate] confidence=0.93 — coords OK, no update needed
+[15:01:09.904] ACTION 2/2: drag 695 870 770 600  — Play Strike card on the enemy with 15 health
+[15:01:10.023]   [vision] attempt=0
+  [start] (695,870)→(692,871) Δ(-3,+1) conf=0.97 ✓ ocr=skipped
+  [end] (770,600)→(922,581) Δ(+152,-19) conf=0.93 ✓
+[15:01:10.025]   [exec] attempt=0  settle=0.50s  cmd=drag 692 871 922 581  screen=(692,871)->(922,581)
+[15:01:13.299]   [result] attempt=0  screen=CHANGED  stable
+[15:01:13.300]   [OK] action 2 after 1 attempt(s)
+[15:01:13.370] STEP 5 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.5, max_attempts=2, overall_screen_change=yes
+
+============================================================
+STEP 6  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:01:17.802] ACTION 1/3: drag 500 890 650 500  — Play Strike on the 10 HP enemy
+[15:01:17.920]   [vision] attempt=0
+  [start] (500,890)→(500,890) no shift conf=0.99 ✓ ocr=skipped
+  [end] (650,500)→(650,500) no shift conf=0.98 ✓
+[15:01:17.922]   [exec] attempt=0  settle=0.50s  cmd=drag 500 890 650 500  screen=(500,890)->(650,500)
+[15:01:21.190]   [result] attempt=0  screen=CHANGED  stable
+[15:01:21.191]   [OK] action 1 after 1 attempt(s)
+[15:01:21.330]   [revalidate] confidence=0.57 — coords OK, no update needed
+[15:01:21.331] ACTION 2/3: drag 580 890 650 500  — Play Strike on the 10 HP enemy to finish it
+[15:01:21.545]   [vision] attempt=0
+  [start] (580,890)→(580,890) no shift conf=0.98 ✓ ocr=skipped
+  [end] (650,500)→(653,255) Δ(+3,-245) conf=0.57 ✓
+[15:01:21.547]   [exec] attempt=0  settle=0.50s  cmd=drag 580 890 653 255  screen=(580,890)->(653,255)
+[15:01:24.828]   [result] attempt=0  screen=UNCHANGED  stable
+[15:01:25.393]   [vision] attempt=1
+  [start] (580,890)→(580,890) no shift conf=0.98 ✓ ocr=skipped
+  [end] (650,500)→(653,255) Δ(+3,-245) conf=0.97 ✓
+[15:01:25.394]   [exec] attempt=1  settle=0.55s  cmd=drag 580 890 653 237  screen=(580,890)->(653,237)
+[15:01:28.746]   [result] attempt=1  screen=CHANGED  stable
+[15:01:28.746]   [OK] action 2 after 2 attempt(s)
+[15:01:28.789]   [revalidate] confidence=0.98 — coords OK, no update needed
+[15:01:28.790] ACTION 3/3: drag 660 890 770 500  — Play Strike on the 15 HP enemy
+[15:01:28.886]   [vision] attempt=0
+  [start] (660,890)→(660,890) no shift conf=0.99 ✓ ocr=skipped
+  [end] (770,500)→(770,500) no shift conf=0.98 ✓
+[15:01:28.889]   [exec] attempt=0  settle=0.50s  cmd=drag 660 890 770 500  screen=(660,890)->(770,500)
+[15:01:32.184]   [result] attempt=0  screen=CHANGED  stable
+[15:01:32.185]   [OK] action 3 after 1 attempt(s)
+[15:01:32.253] STEP 6 SUMMARY: 3/3 succeeded, 0 failed, avg_attempts=1.3, max_attempts=2, overall_screen_change=yes
+
+============================================================
+STEP 7  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:01:36.293] ACTION 1/1: drag 585 918 647 629  — Play Strike on the leftmost enemy with 10 HP to defeat it.
+[15:01:36.397]   [vision] attempt=0
+  [start] (585,918)→(585,918) no shift conf=1.00 ✓ ocr=skipped
+  [end] (647,629)→(647,629) no shift conf=1.00 ✓
+[15:01:36.400]   [exec] attempt=0  settle=0.50s  cmd=drag 585 918 647 629  screen=(585,918)->(647,629)
+[15:01:39.672]   [result] attempt=0  screen=CHANGED  stable
+[15:01:39.673]   [OK] action 1 after 1 attempt(s)
+[15:01:39.745] STEP 7 SUMMARY: 1/1 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 8  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:01:44.334] ACTION 1/3: drag 395 918 780 650  — Play Bash on the enemy with 15 health to apply Vulnerable
+[15:01:44.479]   [vision] attempt=0
+  [start] (395,918)→(395,918) no shift conf=1.00 ✓ ocr=skipped
+  [end] (780,650)→(780,650) no shift conf=1.00 ✓
+[15:01:44.483]   [exec] attempt=0  settle=0.50s  cmd=drag 395 918 780 650  screen=(395,918)->(780,650)
+[15:01:47.827]   [result] attempt=0  screen=CHANGED  stable
+[15:01:47.828]   [OK] action 1 after 1 attempt(s)
+[15:01:47.905]   [revalidate] confidence=0.92 — coords OK, no update needed
+[15:01:47.906] ACTION 2/3: drag 490 918 670 650  — Play Strike on the enemy with 10 health to defeat it
+[15:01:48.054]   [vision] attempt=0
+  [start] (490,918)→(490,918) no shift conf=1.00 ✓ ocr=skipped
+  [end] (670,650)→(803,671) Δ(+133,+21) conf=0.92 ✓
+[15:01:48.056]   [exec] attempt=0  settle=0.50s  cmd=drag 490 918 803 671  screen=(490,918)->(803,671)
+[15:01:51.405]   [result] attempt=0  screen=UNCHANGED  stable
+[15:01:51.920]   [vision] attempt=1
+  [start] (490,918)→(490,918) no shift conf=0.99 ✓ ocr=skipped
+  [end] (670,650)→(670,650) no shift conf=0.98 ✓
+[15:01:51.923]   [exec] attempt=1  settle=0.55s  cmd=drag 490 918 670 632  screen=(490,918)->(670,632)
+[15:01:55.280]   [result] attempt=1  screen=CHANGED  stable
+[15:01:55.281]   [OK] action 2 after 2 attempt(s)
+[15:01:55.341]   [revalidate] confidence=0.73 — coords OK, no update needed
+[15:01:55.343] ACTION 3/3: drag 585 918 780 650  — Play Strike on the enemy with 15 health to deal damage
+[15:01:55.463]   [vision] attempt=0
+  [start] (585,918)→(585,918) no shift conf=0.99 ✓ ocr=skipped
+  [end] (780,650)→(780,650) no shift conf=0.73 ✓
+[15:01:55.465]   [exec] attempt=0  settle=0.50s  cmd=drag 585 918 780 650  screen=(585,918)->(780,650)
+[15:01:58.747]   [result] attempt=0  screen=CHANGED  stable
+[15:01:58.747]   [OK] action 3 after 1 attempt(s)
+[15:01:58.815] STEP 8 SUMMARY: 3/3 succeeded, 0 failed, avg_attempts=1.3, max_attempts=2, overall_screen_change=yes
+
+============================================================
+STEP 9  |  model=gemini-3.1-flash-lite-preview  target=Monitor 1
+============================================================
+[15:02:03.174] ACTION 1/3: drag 395 862 770 540  — Play Bash on the 15 HP enemy to apply Vulnerable
+[15:02:03.282]   [vision] attempt=0
+  [start] (395,862)→(395,862) no shift conf=0.99 ✓ ocr=skipped
+  [end] (770,540)→(770,540) no shift conf=1.00 ✓
+[15:02:03.284]   [exec] attempt=0  settle=0.50s  cmd=drag 395 862 770 540  screen=(395,862)->(770,540)

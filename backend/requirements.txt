@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+mss
+pygetwindow
+pydirectinput
+pillow
+opencv-python
+numpy
+pytesseract
+python-dotenv
+websockets
+requests

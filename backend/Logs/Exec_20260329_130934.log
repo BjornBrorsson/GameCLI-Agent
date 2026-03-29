@@ -1,0 +1,177 @@
+=== Execution Log — 2026-03-29 13:09:34 ===
+
+
+============================================================
+STEP 1  |  model=gemini-2.5-flash  target=Monitor 1
+============================================================
+[13:10:04.233] ACTION 1/2: click 550 450  — Move the hero to an adjacent tile on the path to begin exploring.
+[13:10:04.463]   [vision] attempt=0
+  [target] (550,450)→(550,220) Δ(+0,-230) conf=0.81 ✓
+[13:10:04.465]   [exec] attempt=0  settle=0.50s  cmd=click 550 220  screen=(550,220)
+[13:10:06.209]   [result] attempt=0  screen=UNCHANGED  stable
+[13:10:06.303]   [vision] attempt=1
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:06.305]   [exec] attempt=1  settle=0.55s  cmd=click 550 432  screen=(550,432)
+[13:10:08.093]   [result] attempt=1  screen=UNCHANGED  stable
+[13:10:08.194]   [vision] attempt=2
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:08.195]   [exec] attempt=2  settle=0.60s  cmd=click 568 450  screen=(568,450)
+[13:10:09.911]   [result] attempt=2  screen=UNCHANGED  stable
+[13:10:09.995]   [vision] attempt=3
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:09.997]   [exec] attempt=3  settle=0.65s  cmd=click 532 450  screen=(532,450)
+[13:10:11.712]   [result] attempt=3  screen=UNCHANGED  stable
+[13:10:11.811]   [vision] attempt=4
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:11.812]   [exec] attempt=4  settle=0.70s  cmd=click 550 468  screen=(550,468)
+[13:10:13.626]   [result] attempt=4  screen=UNCHANGED  stable
+[13:10:13.747]   [vision] attempt=5
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:13.750]   [exec] attempt=5  settle=0.75s  cmd=click 568 432  screen=(568,432)
+[13:10:15.486]   [result] attempt=5  screen=UNCHANGED  stable
+[13:10:15.584]   [vision] attempt=6
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:15.586]   [exec] attempt=6  settle=0.80s  cmd=click 532 432  screen=(532,432)
+[13:10:17.327]   [result] attempt=6  screen=UNCHANGED  stable
+[13:10:17.425]   [vision] attempt=7
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:17.427]   [exec] attempt=7  settle=0.85s  cmd=click 550 432  screen=(550,432)
+[13:10:19.140]   [result] attempt=7  screen=UNCHANGED  stable
+[13:10:19.223]   [vision] attempt=8
+  [target] (550,450)→(550,450) no shift conf=1.00 ✓
+[13:10:19.225]   [exec] attempt=8  settle=0.90s  cmd=click 568 450  screen=(568,450)
+[13:10:20.955]   [result] attempt=8  screen=UNCHANGED  stable
+[13:10:20.957]   [FAILED] action 1 after 9 attempt(s)
+[13:10:20.959] ACTION 2/2: click 850 690  — End the turn after moving the hero.
+[13:10:21.055]   [vision] attempt=0
+  [target] (850,690)→(850,690) no shift conf=1.00 ✓
+[13:10:21.058]   [exec] attempt=0  settle=0.50s  cmd=click 850 690  screen=(850,690)
+[13:10:22.789]   [result] attempt=0  screen=UNCHANGED  stable
+[13:10:22.891]   [vision] attempt=1
+  [target] (850,690)→(850,690) no shift conf=1.00 ✓
+[13:10:22.893]   [exec] attempt=1  settle=0.55s  cmd=click 850 672  screen=(850,672)
+[13:10:24.649]   [result] attempt=1  screen=UNCHANGED  stable
+[13:10:24.736]   [vision] attempt=2
+  [target] (850,690)→(850,690) no shift conf=1.00 ✓
+[13:10:24.737]   [exec] attempt=2  settle=0.60s  cmd=click 868 690  screen=(868,690)
+[13:10:26.486]   [result] attempt=2  screen=UNCHANGED  stable
+[13:10:26.587]   [vision] attempt=3
+  [target] (850,690)→(850,690) no shift conf=0.91 ✓
+[13:10:26.588]   [exec] attempt=3  settle=0.65s  cmd=click 832 690  screen=(832,690)
+[13:10:28.334]   [result] attempt=3  screen=UNCHANGED  stable
+[13:10:28.421]   [vision] attempt=4
+  [target] (850,690)→(850,690) no shift conf=1.00 ✓
+[13:10:28.424]   [exec] attempt=4  settle=0.70s  cmd=click 850 708  screen=(850,708)
+[13:10:30.137]   [result] attempt=4  screen=UNCHANGED  stable
+[13:10:30.235]   [vision] attempt=5
+  [target] (850,690)→(850,690) no shift conf=1.00 ✓
+[13:10:30.238]   [exec] attempt=5  settle=0.75s  cmd=click 868 672  screen=(868,672)
+[13:10:31.990]   [result] attempt=5  screen=CHANGED  stable
+[13:10:31.991]   [OK] action 2 after 6 attempt(s)
+[13:10:32.073] STEP 1 SUMMARY: 1/2 succeeded, 1 failed, avg_attempts=7.5, max_attempts=9, overall_screen_change=yes
+[13:10:32.073] *** PAUSED — struggling: avg_attempts=7.5, max_attempts=9, failed=1 ***
+[13:10:40.404] *** RESUMED by user ***
+
+============================================================
+STEP 2  |  model=gemini-2.5-flash  target=Monitor 1
+============================================================
+[13:11:10.609] ACTION 1/1: click 680 550  — Move hero Orrin to the treasure chest to collect it.
+[13:11:10.703]   [vision] attempt=0
+  [target] (680,550)→(680,550) no shift conf=0.98 ✓
+[13:11:10.705]   [exec] attempt=0  settle=0.50s  cmd=click 680 550  screen=(680,550)
+[13:11:12.413]   [result] attempt=0  screen=UNCHANGED  stable
+[13:11:12.498]   [vision] attempt=1
+  [target] (680,550)→(680,550) no shift conf=0.83 ✓
+[13:11:12.503]   [exec] attempt=1  settle=0.55s  cmd=click 680 532  screen=(680,532)
+[13:11:14.732]   [result] attempt=1  screen=CHANGED  stable
+[13:11:14.732]   [OK] action 1 after 2 attempt(s)
+[13:11:14.805] STEP 2 SUMMARY: 1/1 succeeded, 0 failed, avg_attempts=2.0, max_attempts=2, overall_screen_change=yes
+
+============================================================
+STEP 3  |  model=gemini-2.5-flash  target=Monitor 1
+============================================================
+[13:12:14.923] ACTION 1/2: click 425 560  — Select +1 Spell Power
+[13:12:15.019]   [vision] attempt=0
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:15.022]   [exec] attempt=0  settle=0.50s  cmd=click 425 560  screen=(425,560)
+[13:12:16.775]   [result] attempt=0  screen=UNCHANGED  stable
+[13:12:16.880]   [vision] attempt=1
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:16.881]   [exec] attempt=1  settle=0.55s  cmd=click 425 542  screen=(425,542)
+[13:12:18.612]   [result] attempt=1  screen=UNCHANGED  stable
+[13:12:18.693]   [vision] attempt=2
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:18.694]   [exec] attempt=2  settle=0.60s  cmd=click 443 560  screen=(443,560)
+[13:12:20.411]   [result] attempt=2  screen=UNCHANGED  stable
+[13:12:20.495]   [vision] attempt=3
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:20.497]   [exec] attempt=3  settle=0.65s  cmd=click 407 560  screen=(407,560)
+[13:12:22.218]   [result] attempt=3  screen=UNCHANGED  stable
+[13:12:22.314]   [vision] attempt=4
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:22.316]   [exec] attempt=4  settle=0.70s  cmd=click 425 578  screen=(425,578)
+[13:12:24.069]   [result] attempt=4  screen=UNCHANGED  stable
+[13:12:24.178]   [vision] attempt=5
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:24.180]   [exec] attempt=5  settle=0.75s  cmd=click 443 542  screen=(443,542)
+[13:12:25.904]   [result] attempt=5  screen=UNCHANGED  stable
+[13:12:26.002]   [vision] attempt=6
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:26.004]   [exec] attempt=6  settle=0.80s  cmd=click 407 542  screen=(407,542)
+[13:12:27.735]   [result] attempt=6  screen=UNCHANGED  stable
+[13:12:27.822]   [vision] attempt=7
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:27.824]   [exec] attempt=7  settle=0.85s  cmd=click 425 542  screen=(425,542)
+[13:12:29.553]   [result] attempt=7  screen=UNCHANGED  stable
+[13:12:29.645]   [vision] attempt=8
+  [target] (425,560)→(425,560) no shift conf=1.00 ✓
+[13:12:29.647]   [exec] attempt=8  settle=0.90s  cmd=click 443 560  screen=(443,560)
+[13:12:31.407]   [result] attempt=8  screen=UNCHANGED  stable
+[13:12:31.408]   [FAILED] action 1 after 9 attempt(s)
+[13:12:31.408] ACTION 2/2: click 470 670  — Confirm the choice
+[13:12:31.508]   [vision] attempt=0
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:31.511]   [exec] attempt=0  settle=0.50s  cmd=click 470 670  screen=(470,670)
+[13:12:33.240]   [result] attempt=0  screen=UNCHANGED  stable
+[13:12:33.326]   [vision] attempt=1
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:33.327]   [exec] attempt=1  settle=0.55s  cmd=click 470 652  screen=(470,652)
+[13:12:35.078]   [result] attempt=1  screen=UNCHANGED  stable
+[13:12:35.166]   [vision] attempt=2
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:35.167]   [exec] attempt=2  settle=0.60s  cmd=click 488 670  screen=(488,670)
+[13:12:36.892]   [result] attempt=2  screen=UNCHANGED  stable
+[13:12:36.981]   [vision] attempt=3
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:36.982]   [exec] attempt=3  settle=0.65s  cmd=click 452 670  screen=(452,670)
+[13:12:38.728]   [result] attempt=3  screen=UNCHANGED  stable
+[13:12:38.819]   [vision] attempt=4
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:38.821]   [exec] attempt=4  settle=0.70s  cmd=click 470 688  screen=(470,688)
+[13:12:40.607]   [result] attempt=4  screen=UNCHANGED  stable
+[13:12:40.705]   [vision] attempt=5
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:40.708]   [exec] attempt=5  settle=0.75s  cmd=click 488 652  screen=(488,652)
+[13:12:42.444]   [result] attempt=5  screen=UNCHANGED  stable
+[13:12:42.533]   [vision] attempt=6
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:42.535]   [exec] attempt=6  settle=0.80s  cmd=click 452 652  screen=(452,652)
+[13:12:44.266]   [result] attempt=6  screen=UNCHANGED  stable
+[13:12:44.367]   [vision] attempt=7
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:44.369]   [exec] attempt=7  settle=0.85s  cmd=click 470 652  screen=(470,652)
+[13:12:46.104]   [result] attempt=7  screen=UNCHANGED  stable
+[13:12:46.189]   [vision] attempt=8
+  [target] (470,670)→(470,670) no shift conf=1.00 ✓
+[13:12:46.190]   [exec] attempt=8  settle=0.90s  cmd=click 488 670  screen=(488,670)
+[13:12:47.906]   [result] attempt=8  screen=UNCHANGED  stable
+[13:12:47.908]   [FAILED] action 2 after 9 attempt(s)
+[13:12:47.976]   [same-state] overall_screen_change=no → retrying last action: click 470 670
+[13:12:51.508]   [same-state] retry 1 — still unchanged
+[13:12:55.042]   [same-state] retry 2 — still unchanged
+[13:12:58.617]   [same-state] retry 3 — still unchanged
+[13:13:02.152]   [same-state] retry 4 — still unchanged
+[13:13:05.686]   [same-state] retry 5 — still unchanged
+[13:13:05.687] STEP 3 SUMMARY: 0/2 succeeded, 2 failed, avg_attempts=9.0, max_attempts=9, overall_screen_change=no
+[13:13:05.688] *** PAUSED — struggling: avg_attempts=9.0, max_attempts=9, failed=2 ***
+[13:13:15.301] *** ABORTED by user ***

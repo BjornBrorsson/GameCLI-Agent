@@ -1,0 +1,425 @@
+=== Execution Log — 2026-03-29 11:41:05 ===
+
+
+============================================================
+STEP 1  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[11:41:41.894] ACTION 1/1: click 1032 688  — Move the hero to the treasure chest to collect resources or experience.
+[11:41:41.988]   [vision] attempt=0
+  [target] (1032,688)→(1032,688) no shift conf=1.00 ✓
+[11:41:41.989]   [exec] attempt=0  settle=0.50s  cmd=click 1032 688
+[11:41:43.817]   [result] attempt=0  screen=UNCHANGED  stable
+[11:41:44.304]   [vision] attempt=1
+  [target] (1032,688)→(1032,688) no shift conf=0.92 ✓
+[11:41:44.305]   [exec] attempt=1  settle=0.55s  cmd=click 1032 670
+[11:41:46.139]   [result] attempt=1  screen=UNCHANGED  stable
+[11:41:46.603]   [vision] attempt=2
+  [target] (1032,688)→(1032,688) no shift conf=0.94 ✓
+[11:41:46.605]   [exec] attempt=2  settle=0.60s  cmd=click 1050 688
+[11:41:48.407]   [result] attempt=2  screen=UNCHANGED  stable
+[11:41:48.872]   [vision] attempt=3
+  [target] (1032,688)→(1032,688) no shift conf=0.91 ✓
+[11:41:48.874]   [exec] attempt=3  settle=0.65s  cmd=click 1014 688
+[11:41:50.727]   [result] attempt=3  screen=UNCHANGED  stable
+[11:41:51.201]   [vision] attempt=4
+  [target] (1032,688)→(1032,688) no shift conf=0.94 ✓
+[11:41:51.202]   [exec] attempt=4  settle=0.70s  cmd=click 1032 706
+[11:41:53.028]   [result] attempt=4  screen=UNCHANGED  stable
+[11:41:53.515]   [vision] attempt=5
+  [target] (1032,688)→(1032,688) no shift conf=0.75 ✓
+[11:41:53.517]   [exec] attempt=5  settle=0.75s  cmd=click 1050 670
+[11:41:55.330]   [result] attempt=5  screen=UNCHANGED  stable
+[11:41:55.792]   [vision] attempt=6
+  [target] (1032,688)→(1032,688) no shift conf=0.73 ✓
+[11:41:55.793]   [exec] attempt=6  settle=0.80s  cmd=click 1014 670
+[11:41:57.600]   [result] attempt=6  screen=UNCHANGED  stable
+[11:41:58.061]   [vision] attempt=7
+  [target] (1032,688)→(1032,688) no shift conf=0.95 ✓
+[11:41:58.063]   [exec] attempt=7  settle=0.85s  cmd=click 1032 670
+[11:41:59.872]   [result] attempt=7  screen=UNCHANGED  stable
+[11:42:00.362]   [vision] attempt=8
+  [target] (1032,688)→(1032,688) no shift conf=0.98 ✓
+[11:42:00.364]   [exec] attempt=8  settle=0.90s  cmd=click 1050 688
+[11:42:02.174]   [result] attempt=8  screen=CHANGED  stable
+[11:42:02.175]   [OK] action 1 after 9 attempt(s)
+[11:42:02.265] STEP 1 SUMMARY: 1/1 succeeded, 0 failed (0% error rate), overall_screen_change=yes
+
+============================================================
+STEP 2  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[11:43:04.558] ACTION 1/1: click 413 517  — Click the treasure chest to move to it and collect its contents
+[11:43:04.666]   [vision] attempt=0
+  [target] (413,517)→(413,517) no shift conf=0.99 ✓
+[11:43:04.669]   [exec] attempt=0  settle=0.50s  cmd=click 413 517
+[11:43:06.466]   [result] attempt=0  screen=UNCHANGED  stable
+[11:43:06.934]   [vision] attempt=1
+  [target] (413,517)→(413,517) no shift conf=0.85 ✓
+[11:43:06.936]   [exec] attempt=1  settle=0.55s  cmd=click 413 499
+[11:43:09.772]   [result] attempt=1  screen=CHANGED  stable
+[11:43:09.773]   [OK] action 1 after 2 attempt(s)
+[11:43:09.853] STEP 2 SUMMARY: 1/1 succeeded, 0 failed (0% error rate), overall_screen_change=yes
+
+============================================================
+STEP 3  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[11:43:52.920] ACTION 1/1: click 616 520  — Move the hero to the treasure chest to collect gold or resources.
+[11:43:53.032]   [vision] attempt=0
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:43:53.034]   [exec] attempt=0  settle=0.50s  cmd=click 616 520
+[11:43:54.834]   [result] attempt=0  screen=UNCHANGED  stable
+[11:43:55.320]   [vision] attempt=1
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:43:55.322]   [exec] attempt=1  settle=0.55s  cmd=click 616 502
+[11:43:57.142]   [result] attempt=1  screen=UNCHANGED  stable
+[11:43:57.618]   [vision] attempt=2
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:43:57.620]   [exec] attempt=2  settle=0.60s  cmd=click 634 520
+[11:43:59.409]   [result] attempt=2  screen=UNCHANGED  stable
+[11:43:59.884]   [vision] attempt=3
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:43:59.887]   [exec] attempt=3  settle=0.65s  cmd=click 598 520
+[11:44:01.688]   [result] attempt=3  screen=UNCHANGED  stable
+[11:44:02.150]   [vision] attempt=4
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:02.152]   [exec] attempt=4  settle=0.70s  cmd=click 616 538
+[11:44:03.941]   [result] attempt=4  screen=UNCHANGED  stable
+[11:44:04.409]   [vision] attempt=5
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:04.411]   [exec] attempt=5  settle=0.75s  cmd=click 634 502
+[11:44:06.210]   [result] attempt=5  screen=UNCHANGED  stable
+[11:44:06.677]   [vision] attempt=6
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:06.679]   [exec] attempt=6  settle=0.80s  cmd=click 598 502
+[11:44:08.487]   [result] attempt=6  screen=UNCHANGED  stable
+[11:44:08.962]   [vision] attempt=7
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:08.965]   [exec] attempt=7  settle=0.85s  cmd=click 616 502
+[11:44:10.777]   [result] attempt=7  screen=UNCHANGED  stable
+[11:44:11.242]   [vision] attempt=8
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:11.244]   [exec] attempt=8  settle=0.90s  cmd=click 634 520
+[11:44:13.052]   [result] attempt=8  screen=UNCHANGED  stable
+[11:44:13.527]   [vision] attempt=9
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:13.529]   [exec] attempt=9  settle=0.95s  cmd=click 598 520
+[11:44:15.341]   [result] attempt=9  screen=UNCHANGED  stable
+[11:44:15.829]   [vision] attempt=10
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:15.831]   [exec] attempt=10  settle=1.00s  cmd=click 616 538
+[11:44:17.670]   [result] attempt=10  screen=UNCHANGED  stable
+[11:44:18.173]   [vision] attempt=11
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:18.174]   [exec] attempt=11  settle=1.05s  cmd=click 634 502
+[11:44:19.992]   [result] attempt=11  screen=UNCHANGED  stable
+[11:44:20.455]   [vision] attempt=12
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:20.456]   [exec] attempt=12  settle=1.10s  cmd=click 598 502
+[11:44:22.259]   [result] attempt=12  screen=UNCHANGED  stable
+[11:44:22.729]   [vision] attempt=13
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:22.731]   [exec] attempt=13  settle=1.15s  cmd=click 616 502
+[11:44:24.542]   [result] attempt=13  screen=UNCHANGED  stable
+[11:44:25.025]   [vision] attempt=14
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:25.026]   [exec] attempt=14  settle=1.20s  cmd=click 634 520
+[11:44:26.885]   [result] attempt=14  screen=UNCHANGED  stable
+[11:44:27.377]   [vision] attempt=15
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:27.379]   [exec] attempt=15  settle=1.25s  cmd=click 598 520
+[11:44:29.227]   [result] attempt=15  screen=UNCHANGED  stable
+[11:44:29.757]   [vision] attempt=16
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:29.758]   [exec] attempt=16  settle=1.30s  cmd=click 616 538
+[11:44:31.550]   [result] attempt=16  screen=UNCHANGED  stable
+[11:44:32.024]   [vision] attempt=17
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:32.027]   [exec] attempt=17  settle=1.35s  cmd=click 634 502
+[11:44:33.868]   [result] attempt=17  screen=UNCHANGED  stable
+[11:44:34.342]   [vision] attempt=18
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:34.343]   [exec] attempt=18  settle=1.40s  cmd=click 598 502
+[11:44:36.189]   [result] attempt=18  screen=UNCHANGED  stable
+[11:44:36.661]   [vision] attempt=19
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:36.663]   [exec] attempt=19  settle=1.45s  cmd=click 616 502
+[11:44:38.456]   [result] attempt=19  screen=UNCHANGED  stable
+[11:44:38.938]   [vision] attempt=20
+  [target] (616,520)→(616,520) no shift conf=1.00 ✓
+[11:44:38.940]   [exec] attempt=20  settle=1.50s  cmd=click 634 520
+[11:44:40.757]   [result] attempt=20  screen=UNCHANGED  stable
+[11:44:40.759]   [FAILED] action 1 after 21 attempt(s)
+[11:44:40.845] STEP 3 SUMMARY: 0/1 succeeded, 1 failed (100% error rate), overall_screen_change=no
+[11:44:40.846] *** PAUSED — error rate 100% ***
+[11:45:03.701] *** RESUMED by user ***
+
+============================================================
+STEP 4  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[11:45:45.066] ACTION 1/1: double_click 1178 522  — Command Charna to move to and collect the treasure chest for resources or experience.
+[11:45:45.661]   [vision] attempt=0
+  [target] (1178,522)→(997,577) Δ(-181,+55) conf=0.23 ✗ LOW
+[11:45:45.663]   [exec] attempt=0  settle=0.50s  cmd=double_click 1178 522
+[11:45:47.773]   [result] attempt=0  screen=UNCHANGED  stable
+[11:45:48.235]   [vision] attempt=1
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:45:48.236]   [exec] attempt=1  settle=0.55s  cmd=double_click 1178 504
+[11:45:50.279]   [result] attempt=1  screen=UNCHANGED  stable
+[11:45:50.747]   [vision] attempt=2
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:45:50.749]   [exec] attempt=2  settle=0.60s  cmd=double_click 1196 522
+[11:45:52.795]   [result] attempt=2  screen=UNCHANGED  stable
+[11:45:53.263]   [vision] attempt=3
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:45:53.264]   [exec] attempt=3  settle=0.65s  cmd=double_click 1160 522
+[11:45:55.317]   [result] attempt=3  screen=UNCHANGED  stable
+[11:45:55.776]   [vision] attempt=4
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:45:55.778]   [exec] attempt=4  settle=0.70s  cmd=double_click 1178 540
+[11:45:57.867]   [result] attempt=4  screen=UNCHANGED  stable
+[11:45:58.346]   [vision] attempt=5
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:45:58.348]   [exec] attempt=5  settle=0.75s  cmd=double_click 1196 504
+[11:46:00.389]   [result] attempt=5  screen=UNCHANGED  stable
+[11:46:00.866]   [vision] attempt=6
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:00.868]   [exec] attempt=6  settle=0.80s  cmd=double_click 1160 504
+[11:46:02.907]   [result] attempt=6  screen=UNCHANGED  stable
+[11:46:03.370]   [vision] attempt=7
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:03.372]   [exec] attempt=7  settle=0.85s  cmd=double_click 1178 504
+[11:46:05.424]   [result] attempt=7  screen=UNCHANGED  stable
+[11:46:05.874]   [vision] attempt=8
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:05.875]   [exec] attempt=8  settle=0.90s  cmd=double_click 1196 522
+[11:46:07.944]   [result] attempt=8  screen=UNCHANGED  stable
+[11:46:08.431]   [vision] attempt=9
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:08.433]   [exec] attempt=9  settle=0.95s  cmd=double_click 1160 522
+[11:46:10.501]   [result] attempt=9  screen=UNCHANGED  stable
+[11:46:10.970]   [vision] attempt=10
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:10.974]   [exec] attempt=10  settle=1.00s  cmd=double_click 1178 540
+[11:46:13.011]   [result] attempt=10  screen=UNCHANGED  stable
+[11:46:13.486]   [vision] attempt=11
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:13.488]   [exec] attempt=11  settle=1.05s  cmd=double_click 1196 504
+[11:46:15.531]   [result] attempt=11  screen=UNCHANGED  stable
+[11:46:15.991]   [vision] attempt=12
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:15.992]   [exec] attempt=12  settle=1.10s  cmd=double_click 1160 504
+[11:46:18.030]   [result] attempt=12  screen=UNCHANGED  stable
+[11:46:18.502]   [vision] attempt=13
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:18.504]   [exec] attempt=13  settle=1.15s  cmd=double_click 1178 504
+[11:46:20.559]   [result] attempt=13  screen=UNCHANGED  stable
+[11:46:21.027]   [vision] attempt=14
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:21.029]   [exec] attempt=14  settle=1.20s  cmd=double_click 1196 522
+[11:46:23.078]   [result] attempt=14  screen=UNCHANGED  stable
+[11:46:23.557]   [vision] attempt=15
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:23.559]   [exec] attempt=15  settle=1.25s  cmd=double_click 1160 522
+[11:46:25.612]   [result] attempt=15  screen=UNCHANGED  stable
+[11:46:26.082]   [vision] attempt=16
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:26.083]   [exec] attempt=16  settle=1.30s  cmd=double_click 1178 540
+[11:46:28.149]   [result] attempt=16  screen=UNCHANGED  stable
+[11:46:28.617]   [vision] attempt=17
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:28.618]   [exec] attempt=17  settle=1.35s  cmd=double_click 1196 504
+[11:46:30.668]   [result] attempt=17  screen=UNCHANGED  stable
+[11:46:31.140]   [vision] attempt=18
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:31.142]   [exec] attempt=18  settle=1.40s  cmd=double_click 1160 504
+[11:46:33.198]   [result] attempt=18  screen=UNCHANGED  stable
+[11:46:33.672]   [vision] attempt=19
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:33.673]   [exec] attempt=19  settle=1.45s  cmd=double_click 1178 504
+[11:46:35.795]   [result] attempt=19  screen=UNCHANGED  stable
+[11:46:36.298]   [vision] attempt=20
+  [target] (1178,522)→(1178,522) no shift conf=1.00 ✓
+[11:46:36.301]   [exec] attempt=20  settle=1.50s  cmd=double_click 1196 522
+[11:46:38.357]   [result] attempt=20  screen=UNCHANGED  stable
+[11:46:38.359]   [FAILED] action 1 after 21 attempt(s)
+[11:46:38.429] STEP 4 SUMMARY: 0/1 succeeded, 1 failed (100% error rate), overall_screen_change=no
+[11:46:38.429] *** PAUSED — error rate 100% ***
+[11:47:09.981] *** RESUMED by user ***
+
+============================================================
+STEP 5  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[11:47:58.353] ACTION 1/2: click 935 620  — Select the 1500 experience reward
+[11:47:58.450]   [vision] attempt=0
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:47:58.453]   [exec] attempt=0  settle=0.50s  cmd=click 935 620
+[11:48:00.306]   [result] attempt=0  screen=UNCHANGED  stable
+[11:48:00.769]   [vision] attempt=1
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:00.771]   [exec] attempt=1  settle=0.55s  cmd=click 935 602
+[11:48:02.560]   [result] attempt=1  screen=UNCHANGED  stable
+[11:48:03.022]   [vision] attempt=2
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:03.023]   [exec] attempt=2  settle=0.60s  cmd=click 953 620
+[11:48:04.827]   [result] attempt=2  screen=UNCHANGED  stable
+[11:48:05.284]   [vision] attempt=3
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:05.286]   [exec] attempt=3  settle=0.65s  cmd=click 917 620
+[11:48:07.086]   [result] attempt=3  screen=UNCHANGED  stable
+[11:48:07.564]   [vision] attempt=4
+  [target] (935,620)→(935,620) no shift conf=0.70 ✓
+[11:48:07.566]   [exec] attempt=4  settle=0.70s  cmd=click 935 638
+[11:48:09.359]   [result] attempt=4  screen=UNCHANGED  stable
+[11:48:09.841]   [vision] attempt=5
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:09.844]   [exec] attempt=5  settle=0.75s  cmd=click 953 602
+[11:48:11.657]   [result] attempt=5  screen=UNCHANGED  stable
+[11:48:12.134]   [vision] attempt=6
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:12.135]   [exec] attempt=6  settle=0.80s  cmd=click 917 602
+[11:48:13.963]   [result] attempt=6  screen=UNCHANGED  stable
+[11:48:14.433]   [vision] attempt=7
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:14.435]   [exec] attempt=7  settle=0.85s  cmd=click 935 602
+[11:48:16.235]   [result] attempt=7  screen=UNCHANGED  stable
+[11:48:16.704]   [vision] attempt=8
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:16.705]   [exec] attempt=8  settle=0.90s  cmd=click 953 620
+[11:48:18.528]   [result] attempt=8  screen=UNCHANGED  stable
+[11:48:18.991]   [vision] attempt=9
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:18.993]   [exec] attempt=9  settle=0.95s  cmd=click 917 620
+[11:48:20.791]   [result] attempt=9  screen=UNCHANGED  stable
+[11:48:21.278]   [vision] attempt=10
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:21.280]   [exec] attempt=10  settle=1.00s  cmd=click 935 638
+[11:48:23.084]   [result] attempt=10  screen=UNCHANGED  stable
+[11:48:23.552]   [vision] attempt=11
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:23.554]   [exec] attempt=11  settle=1.05s  cmd=click 953 602
+[11:48:25.371]   [result] attempt=11  screen=UNCHANGED  stable
+[11:48:25.851]   [vision] attempt=12
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:25.853]   [exec] attempt=12  settle=1.10s  cmd=click 917 602
+[11:48:27.658]   [result] attempt=12  screen=UNCHANGED  stable
+[11:48:28.137]   [vision] attempt=13
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:28.138]   [exec] attempt=13  settle=1.15s  cmd=click 935 602
+[11:48:29.955]   [result] attempt=13  screen=UNCHANGED  stable
+[11:48:30.433]   [vision] attempt=14
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:30.434]   [exec] attempt=14  settle=1.20s  cmd=click 953 620
+[11:48:32.237]   [result] attempt=14  screen=UNCHANGED  stable
+[11:48:32.752]   [vision] attempt=15
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:32.754]   [exec] attempt=15  settle=1.25s  cmd=click 917 620
+[11:48:34.562]   [result] attempt=15  screen=UNCHANGED  stable
+[11:48:35.068]   [vision] attempt=16
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:35.077]   [exec] attempt=16  settle=1.30s  cmd=click 935 638
+[11:48:36.881]   [result] attempt=16  screen=UNCHANGED  stable
+[11:48:37.351]   [vision] attempt=17
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:37.353]   [exec] attempt=17  settle=1.35s  cmd=click 953 602
+[11:48:39.167]   [result] attempt=17  screen=UNCHANGED  stable
+[11:48:39.632]   [vision] attempt=18
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:39.635]   [exec] attempt=18  settle=1.40s  cmd=click 917 602
+[11:48:41.481]   [result] attempt=18  screen=UNCHANGED  stable
+[11:48:41.958]   [vision] attempt=19
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:41.960]   [exec] attempt=19  settle=1.45s  cmd=click 935 602
+[11:48:43.782]   [result] attempt=19  screen=UNCHANGED  stable
+[11:48:44.248]   [vision] attempt=20
+  [target] (935,620)→(935,620) no shift conf=1.00 ✓
+[11:48:44.251]   [exec] attempt=20  settle=1.50s  cmd=click 953 620
+[11:48:46.052]   [result] attempt=20  screen=UNCHANGED  stable
+[11:48:46.053]   [FAILED] action 1 after 21 attempt(s)
+[11:48:46.054] ACTION 2/2: click 785 795  — Confirm the selection by clicking the checkmark button
+[11:48:46.148]   [vision] attempt=0
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:46.150]   [exec] attempt=0  settle=0.50s  cmd=click 785 795
+[11:48:47.931]   [result] attempt=0  screen=UNCHANGED  stable
+[11:48:48.401]   [vision] attempt=1
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:48.403]   [exec] attempt=1  settle=0.55s  cmd=click 785 777
+[11:48:50.185]   [result] attempt=1  screen=UNCHANGED  stable
+[11:48:50.663]   [vision] attempt=2
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:50.665]   [exec] attempt=2  settle=0.60s  cmd=click 803 795
+[11:48:52.459]   [result] attempt=2  screen=UNCHANGED  stable
+[11:48:52.925]   [vision] attempt=3
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:52.926]   [exec] attempt=3  settle=0.65s  cmd=click 767 795
+[11:48:54.727]   [result] attempt=3  screen=UNCHANGED  stable
+[11:48:55.192]   [vision] attempt=4
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:55.194]   [exec] attempt=4  settle=0.70s  cmd=click 785 813
+[11:48:57.013]   [result] attempt=4  screen=UNCHANGED  stable
+[11:48:57.489]   [vision] attempt=5
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:57.493]   [exec] attempt=5  settle=0.75s  cmd=click 803 777
+[11:48:59.312]   [result] attempt=5  screen=UNCHANGED  stable
+[11:48:59.777]   [vision] attempt=6
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:48:59.780]   [exec] attempt=6  settle=0.80s  cmd=click 767 777
+[11:49:01.582]   [result] attempt=6  screen=UNCHANGED  stable
+[11:49:02.048]   [vision] attempt=7
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:02.050]   [exec] attempt=7  settle=0.85s  cmd=click 785 777
+[11:49:03.852]   [result] attempt=7  screen=UNCHANGED  stable
+[11:49:04.305]   [vision] attempt=8
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:04.308]   [exec] attempt=8  settle=0.90s  cmd=click 803 795
+[11:49:06.111]   [result] attempt=8  screen=UNCHANGED  stable
+[11:49:06.575]   [vision] attempt=9
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:06.576]   [exec] attempt=9  settle=0.95s  cmd=click 767 795
+[11:49:08.413]   [result] attempt=9  screen=UNCHANGED  stable
+[11:49:08.896]   [vision] attempt=10
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:08.898]   [exec] attempt=10  settle=1.00s  cmd=click 785 813
+[11:49:10.692]   [result] attempt=10  screen=UNCHANGED  stable
+[11:49:11.164]   [vision] attempt=11
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:11.166]   [exec] attempt=11  settle=1.05s  cmd=click 803 777
+[11:49:12.983]   [result] attempt=11  screen=UNCHANGED  stable
+[11:49:13.448]   [vision] attempt=12
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:13.449]   [exec] attempt=12  settle=1.10s  cmd=click 767 777
+[11:49:15.260]   [result] attempt=12  screen=UNCHANGED  stable
+[11:49:15.726]   [vision] attempt=13
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:15.728]   [exec] attempt=13  settle=1.15s  cmd=click 785 777
+[11:49:17.517]   [result] attempt=13  screen=UNCHANGED  stable
+[11:49:17.967]   [vision] attempt=14
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:17.969]   [exec] attempt=14  settle=1.20s  cmd=click 803 795
+[11:49:19.777]   [result] attempt=14  screen=UNCHANGED  stable
+[11:49:20.248]   [vision] attempt=15
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:20.251]   [exec] attempt=15  settle=1.25s  cmd=click 767 795
+[11:49:22.052]   [result] attempt=15  screen=UNCHANGED  stable
+[11:49:22.525]   [vision] attempt=16
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:22.526]   [exec] attempt=16  settle=1.30s  cmd=click 785 813
+[11:49:24.340]   [result] attempt=16  screen=UNCHANGED  stable
+[11:49:24.814]   [vision] attempt=17
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:24.815]   [exec] attempt=17  settle=1.35s  cmd=click 803 777
+[11:49:26.651]   [result] attempt=17  screen=UNCHANGED  stable
+[11:49:27.127]   [vision] attempt=18
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:27.128]   [exec] attempt=18  settle=1.40s  cmd=click 767 777
+[11:49:28.952]   [result] attempt=18  screen=UNCHANGED  stable
+[11:49:29.426]   [vision] attempt=19
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:29.427]   [exec] attempt=19  settle=1.45s  cmd=click 785 777
+[11:49:31.234]   [result] attempt=19  screen=UNCHANGED  stable
+[11:49:31.697]   [vision] attempt=20
+  [target] (785,795)→(785,795) no shift conf=1.00 ✓
+[11:49:31.700]   [exec] attempt=20  settle=1.50s  cmd=click 803 795
+[11:49:33.507]   [result] attempt=20  screen=UNCHANGED  stable
+[11:49:33.509]   [FAILED] action 2 after 21 attempt(s)
+[11:49:33.594] STEP 5 SUMMARY: 0/2 succeeded, 2 failed (100% error rate), overall_screen_change=no
+[11:49:33.595] *** PAUSED — error rate 100% ***
+[11:50:47.446] *** ABORTED by user ***

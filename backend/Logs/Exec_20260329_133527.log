@@ -1,0 +1,127 @@
+=== Execution Log — 2026-03-29 13:35:27 ===
+
+
+============================================================
+STEP 1  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[13:36:06.052] ACTION 1/5: drag 1240 930 1000 630  — Play Neutralize on the left fungus to reduce its damage and apply Weak.
+[13:36:06.211]   [vision] attempt=0
+  [start] (1240,930)→(1240,930) no shift conf=1.00 ✓ ocr=skipped
+  [end] (1000,630)→(1000,626) Δ(+0,-4) conf=0.93 ✓
+[13:36:06.213]   [exec] attempt=0  settle=0.50s  cmd=drag 1240 930 1000 626  screen=(1240,930)->(1000,626)
+[13:36:09.526]   [result] attempt=0  screen=CHANGED  stable
+[13:36:09.527]   [OK] action 1 after 1 attempt(s)
+[13:36:09.676]   [revalidate] confidence=0.61 — coords OK, no update needed
+[13:36:09.678] ACTION 2/5: drag 1100 930 960 500  — Play Defend+ to gain 8 block and negate incoming damage.
+[13:36:10.174]   [vision] attempt=0
+  [start] (1100,930)→(1365,966) Δ(+265,+36) conf=0.61 ✓ ocr=unverified
+  [end] (960,500)→(960,500) no shift conf=0.99 ✓
+[13:36:10.176]   [exec] attempt=0  settle=0.50s  cmd=drag 1365 966 960 500  screen=(1365,966)->(960,500)
+[13:36:13.462]   [result] attempt=0  screen=CHANGED  stable
+[13:36:13.463]   [OK] action 2 after 1 attempt(s)
+[13:36:13.519]   [revalidate] confidence=0.85 — coords OK, no update needed
+[13:36:13.520] ACTION 3/5: drag 540 930 960 500  — Play Well-Laid Plans to allow retaining cards at the end of future turns.
+[13:36:13.901]   [vision] attempt=0
+  [start] (540,930)→(629,930) Δ(+89,+0) conf=0.84 ✓ ocr=unverified
+  [end] (960,500)→(960,447) Δ(+0,-53) conf=0.93 ✓
+[13:36:13.903]   [exec] attempt=0  settle=0.50s  cmd=drag 629 930 960 447  screen=(629,930)->(960,447)
+[13:36:17.207]   [result] attempt=0  screen=CHANGED  stable
+[13:36:17.208]   [OK] action 3 after 1 attempt(s)
+[13:36:17.265]   [revalidate] confidence=0.89 — coords OK, no update needed
+[13:36:17.266] ACTION 4/5: drag 960 930 1000 630  — Play Strike on the left fungus to reduce its health.
+[13:36:17.395]   [vision] attempt=0
+  [start] (960,930)→(860,930) Δ(-100,+0) conf=0.89 ✓ ocr=skipped
+  [end] (1000,630)→(1000,626) Δ(+0,-4) conf=0.96 ✓
+[13:36:17.398]   [exec] attempt=0  settle=0.50s  cmd=drag 860 930 1000 626  screen=(860,930)->(1000,626)
+[13:36:20.697]   [result] attempt=0  screen=CHANGED  stable
+[13:36:20.698]   [OK] action 4 after 1 attempt(s)
+[13:36:20.729]   [revalidate] confidence=1.00 — coords OK, no update needed
+[13:36:20.730] ACTION 5/5: click 1550 810  — End turn.
+[13:36:20.822]   [vision] attempt=0
+  [target] (1550,810)→(1550,810) no shift conf=1.00 ✓
+[13:36:20.824]   [exec] attempt=0  settle=0.50s  cmd=click 1550 810  screen=(1550,810)
+[13:36:22.550]   [result] attempt=0  screen=CHANGED  stable
+[13:36:22.550]   [OK] action 5 after 1 attempt(s)
+[13:36:22.619] STEP 1 SUMMARY: 5/5 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 2  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[13:37:37.121] ACTION 1/2: drag 730 880 850 620  — Play Neutralize on the attacking Fungi Beast to apply Weak and reduce its damage
+[13:37:37.235]   [vision] attempt=0
+  [start] (730,880)→(730,880) no shift conf=1.00 ✓ ocr=skipped
+  [end] (850,620)→(850,620) no shift conf=0.99 ✓
+[13:37:37.238]   [exec] attempt=0  settle=0.50s  cmd=drag 730 880 850 620  screen=(730,880)->(850,620)
+[13:37:40.560]   [result] attempt=0  screen=CHANGED  stable
+[13:37:40.560]   [OK] action 1 after 1 attempt(s)
+[13:37:40.674]   [revalidate] confidence=0.61 — coords OK, no update needed
+[13:37:40.675] ACTION 2/2: click 1550 810  — End the turn as no other actions are possible
+[13:37:40.845]   [vision] attempt=0
+  [target] (1550,810)→(1382,518) Δ(-168,-292) conf=0.63 ✓
+[13:37:40.847]   [exec] attempt=0  settle=0.50s  cmd=click 1382 518  screen=(1382,518)
+[13:37:42.561]   [result] attempt=0  screen=CHANGED  stable
+[13:37:42.562]   [OK] action 2 after 1 attempt(s)
+[13:37:42.677] STEP 2 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 3  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[13:38:33.341] ACTION 1/2: drag 1130 900 1050 600  — Play Neutralize on the attacking enemy to reduce its future damage
+[13:38:33.461]   [vision] attempt=0
+  [start] (1130,900)→(1130,900) no shift conf=0.99 ✓ ocr=skipped
+  [end] (1050,600)→(1050,596) Δ(+0,-4) conf=0.85 ✓
+[13:38:33.464]   [exec] attempt=0  settle=0.50s  cmd=drag 1130 900 1050 596  screen=(1130,900)->(1050,596)
+[13:38:36.743]   [result] attempt=0  screen=CHANGED  stable
+[13:38:36.744]   [OK] action 1 after 1 attempt(s)
+[13:38:36.775]   [revalidate] confidence=0.84 — coords OK, no update needed
+[13:38:36.776] ACTION 2/2: click 1650 800  — End the turn as no further energy is available
+[13:38:36.871]   [vision] attempt=0
+  [target] (1650,800)→(1650,800) no shift conf=0.84 ✓
+[13:38:36.873]   [exec] attempt=0  settle=0.50s  cmd=click 1650 800  screen=(1650,800)
+[13:38:38.598]   [result] attempt=0  screen=CHANGED  stable
+[13:38:38.599]   [OK] action 2 after 1 attempt(s)
+[13:38:38.672] STEP 3 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 4  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[13:39:37.142] ACTION 1/2: drag 670 900 1030 600  — Play Neutralize card on the attacking Fungi Beast to apply Weakness
+[13:39:37.286]   [vision] attempt=0
+  [start] (670,900)→(670,900) no shift conf=1.00 ✓ ocr=skipped
+  [end] (1030,600)→(1030,601) Δ(+0,+1) conf=0.98 ✓
+[13:39:37.288]   [exec] attempt=0  settle=0.50s  cmd=drag 670 900 1030 601  screen=(670,900)->(1030,601)
+[13:39:40.667]   [result] attempt=0  screen=CHANGED  stable
+[13:39:40.668]   [OK] action 1 after 1 attempt(s)
+[13:39:40.705]   [revalidate] confidence=1.00 — coords OK, no update needed
+[13:39:40.707] ACTION 2/2: click 1550 810  — Click the End Turn button as no more actions are possible
+[13:39:40.807]   [vision] attempt=0
+  [target] (1550,810)→(1550,810) no shift conf=1.00 ✓
+[13:39:40.809]   [exec] attempt=0  settle=0.50s  cmd=click 1550 810  screen=(1550,810)
+[13:39:42.551]   [result] attempt=0  screen=CHANGED  stable
+[13:39:42.552]   [OK] action 2 after 1 attempt(s)
+[13:39:42.666]   [same-state] overall_screen_change=no → retrying last action: click 1550 810
+[13:39:46.240]   [same-state] retry 1 OK — screen changed
+[13:39:46.240] STEP 4 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 5  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[13:40:29.177] ACTION 1/2: drag 660 920 550 620  — Play Neutralize on the left Fungi Beast to deal damage and apply Weak.
+[13:40:29.294]   [vision] attempt=0
+  [start] (660,920)→(660,920) no shift conf=1.00 ✓ ocr=skipped
+  [end] (550,620)→(550,619) Δ(+0,-1) conf=0.99 ✓
+[13:40:29.296]   [exec] attempt=0  settle=0.50s  cmd=drag 660 920 550 619  screen=(660,920)->(550,619)
+[13:40:32.578]   [result] attempt=0  screen=CHANGED  stable
+[13:40:32.578]   [OK] action 1 after 1 attempt(s)
+[13:40:32.700]   [revalidate] confidence=0.63 — coords OK, no update needed
+[13:40:32.701] ACTION 2/2: click 1550 805  — End the turn as no other cards can be played with zero energy.
+[13:40:32.884]   [vision] attempt=0
+  [target] (1550,805)→(1305,610) Δ(-245,-195) conf=0.63 ✓
+[13:40:32.886]   [exec] attempt=0  settle=0.50s  cmd=click 1305 610  screen=(1305,610)
+[13:40:34.646]   [result] attempt=0  screen=CHANGED  stable
+[13:40:34.646]   [OK] action 2 after 1 attempt(s)
+[13:40:34.715] STEP 5 SUMMARY: 2/2 succeeded, 0 failed, avg_attempts=1.0, max_attempts=1, overall_screen_change=yes
+
+============================================================
+STEP 6  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================

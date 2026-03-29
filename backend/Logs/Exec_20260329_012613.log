@@ -1,0 +1,201 @@
+=== Execution Log — 2026-03-29 01:26:13 ===
+
+
+============================================================
+STEP 1  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[01:26:55.068] ACTION 1/5: drag 695 925 960 540  — Play Piercing Wail to reduce all enemy damage to 0 this turn
+[01:26:55.192]   [vision] attempt=0
+  [start] (695,925)→(695,925) no shift conf=1.00 ✓
+  [end] (960,540)→(960,540) no shift conf=1.00 ✓
+[01:26:55.194]   [exec] attempt=0  settle=0.50s  cmd=drag 695 925 960 540
+[01:26:58.259]   [result] attempt=0  screen=CHANGED  stable
+[01:26:58.266]   [OK] action 1 after 1 attempt(s)
+[01:26:58.267] ACTION 2/5: drag 495 855 590 715  — Play Neutralize on the 8 HP slime
+[01:26:58.362]   [vision] attempt=0
+  [start] (495,855)→(495,855) no shift conf=1.00 ✓
+  [end] (590,715)→(590,715) no shift conf=1.00 ✓
+[01:26:58.364]   [exec] attempt=0  settle=0.50s  cmd=drag 495 855 590 715
+[01:27:01.428]   [result] attempt=0  screen=CHANGED  stable
+[01:27:01.429]   [OK] action 2 after 1 attempt(s)
+[01:27:01.431] ACTION 3/5: drag 295 915 590 715  — Play Sucker Punch on the 8 HP slime to finish it off
+[01:27:01.881]   [vision] attempt=0
+  [start] (295,915)→(295,915) no shift conf=1.00 ✓
+  [end] (590,715)→(176,752) Δ(-414,+37) conf=0.48 ✗ LOW
+[01:27:01.884]   [exec] attempt=0  settle=0.50s  cmd=drag 295 915 590 715
+[01:27:04.969]   [result] attempt=0  screen=CHANGED  stable
+[01:27:04.970]   [OK] action 3 after 1 attempt(s)
+[01:27:04.971] ACTION 4/5: drag 595 885 960 540  — Play Outmaneuver to gain extra energy next turn
+[01:27:05.081]   [vision] attempt=0
+  [start] (595,885)→(595,885) no shift conf=1.00 ✓
+  [end] (960,540)→(960,540) no shift conf=0.96 ✓
+[01:27:05.083]   [exec] attempt=0  settle=0.50s  cmd=drag 595 885 960 540
+[01:27:08.236]   [result] attempt=0  screen=CHANGED  stable
+[01:27:08.237]   [OK] action 4 after 1 attempt(s)
+[01:27:08.238] ACTION 5/5: click 855 805  — End turn
+[01:27:08.331]   [vision] attempt=0
+  [target] (855,805)→(855,805) no shift conf=0.99 ✓
+[01:27:08.333]   [exec] attempt=0  settle=0.50s  cmd=click 855 805
+[01:27:10.132]   [result] attempt=0  screen=CHANGED  stable
+[01:27:10.133]   [OK] action 5 after 1 attempt(s)
+[01:27:10.204] STEP 1 SUMMARY: 5/5 succeeded, 0 failed (0% error rate), overall_screen_change=yes
+
+============================================================
+STEP 2  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[01:28:09.395] ACTION 1/4: drag 1270 920 960 500  — Play Piercing Wail to reduce all incoming damage to 0 this turn
+[01:28:09.509]   [vision] attempt=0
+  [start] (1270,920)→(1270,920) no shift conf=1.00 ✓
+  [end] (960,500)→(960,500) no shift conf=1.00 ✓
+[01:28:09.511]   [exec] attempt=0  settle=0.50s  cmd=drag 1270 920 960 500
+[01:28:12.599]   [result] attempt=0  screen=CHANGED  stable
+[01:28:12.600]   [OK] action 1 after 1 attempt(s)
+[01:28:12.602] ACTION 2/4: drag 960 850 1080 650  — Play Sucker Punch on the second slime to deal damage and apply Weak
+[01:28:13.099]   [vision] attempt=0
+  [start] (960,850)→(1834,275) Δ(+874,-575) conf=0.47 ✗ LOW
+  [end] (1080,650)→(1080,649) Δ(+0,-1) conf=0.98 ✓
+[01:28:13.101]   [exec] attempt=0  settle=0.50s  cmd=drag 960 850 1080 649
+[01:28:16.196]   [result] attempt=0  screen=CHANGED  stable
+[01:28:16.197]   [OK] action 2 after 1 attempt(s)
+[01:28:16.198] ACTION 3/4: drag 1120 920 960 500  — Play Outmaneuver to gain additional energy on the following turn
+[01:28:16.389]   [vision] attempt=0
+  [start] (1120,920)→(1120,920) no shift conf=1.00 ✓
+  [end] (960,500)→(971,204) Δ(+11,-296) conf=0.61 ✓
+[01:28:16.391]   [exec] attempt=0  settle=0.50s  cmd=drag 1120 920 971 204
+[01:28:19.500]   [result] attempt=0  screen=CHANGED  stable
+[01:28:19.501]   [OK] action 3 after 1 attempt(s)
+[01:28:19.502] ACTION 4/4: click 1650 810  — End the turn after playing the optimal cards
+[01:28:19.603]   [vision] attempt=0
+  [target] (1650,810)→(1650,810) no shift conf=1.00 ✓
+[01:28:19.606]   [exec] attempt=0  settle=0.50s  cmd=click 1650 810
+[01:28:21.400]   [result] attempt=0  screen=CHANGED  stable
+[01:28:21.401]   [OK] action 4 after 1 attempt(s)
+[01:28:21.478] STEP 2 SUMMARY: 4/4 succeeded, 0 failed (0% error rate), overall_screen_change=yes
+
+============================================================
+STEP 3  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[01:29:08.553] ACTION 1/4: drag 440 900 1130 720  — Play Neutralize on the middle Spike Slime to kill it
+[01:29:08.672]   [vision] attempt=0
+  [start] (440,900)→(440,900) no shift conf=0.90 ✓
+  [end] (1130,720)→(1125,721) Δ(-5,+1) conf=0.60 ✓
+[01:29:08.674]   [exec] attempt=0  settle=0.50s  cmd=drag 440 900 1125 721
+[01:29:11.760]   [result] attempt=0  screen=CHANGED  stable
+[01:29:11.760]   [OK] action 1 after 1 attempt(s)
+[01:29:11.761] ACTION 2/4: drag 660 900 960 500  — Play Piercing Wail to reduce all incoming damage to zero
+[01:29:11.871]   [vision] attempt=0
+  [start] (660,900)→(660,900) no shift conf=1.00 ✓
+  [end] (960,500)→(960,500) no shift conf=1.00 ✓
+[01:29:11.873]   [exec] attempt=0  settle=0.50s  cmd=drag 660 900 960 500
+[01:29:14.972]   [result] attempt=0  screen=CHANGED  stable
+[01:29:14.973]   [OK] action 2 after 1 attempt(s)
+[01:29:14.974] ACTION 3/4: drag 550 900 960 500  — Play Outmaneuver to gain extra energy next turn
+[01:29:15.090]   [vision] attempt=0
+  [start] (550,900)→(550,900) no shift conf=0.98 ✓
+  [end] (960,500)→(879,401) Δ(-81,-99) conf=0.70 ✓
+[01:29:15.093]   [exec] attempt=0  settle=0.50s  cmd=drag 550 900 879 401
+[01:29:18.222]   [result] attempt=0  screen=CHANGED  stable
+[01:29:18.223]   [OK] action 3 after 1 attempt(s)
+[01:29:18.224] ACTION 4/4: click 1520 810  — End the turn
+[01:29:18.326]   [vision] attempt=0
+  [target] (1520,810)→(1520,810) no shift conf=1.00 ✓
+[01:29:18.328]   [exec] attempt=0  settle=0.50s  cmd=click 1520 810
+[01:29:20.196]   [result] attempt=0  screen=CHANGED  stable
+[01:29:20.196]   [OK] action 4 after 1 attempt(s)
+[01:29:20.276] STEP 3 SUMMARY: 4/4 succeeded, 0 failed (0% error rate), overall_screen_change=yes
+
+============================================================
+STEP 4  |  model=gemini-3-flash-preview  target=Monitor 1
+============================================================
+[01:30:28.196] ACTION 1/6: drag 740 910 600 690  — Play Strike on the 3 HP Spike Slime to kill it
+[01:30:28.315]   [vision] attempt=0
+  [start] (740,910)→(740,910) no shift conf=1.00 ✓
+  [end] (600,690)→(600,690) no shift conf=1.00 ✓
+[01:30:28.317]   [exec] attempt=0  settle=0.50s  cmd=drag 740 910 600 690
+[01:30:31.870]   [result] attempt=0  screen=CHANGED  stable
+[01:30:31.871]   [OK] action 1 after 1 attempt(s)
+[01:30:31.873] ACTION 2/6: drag 520 880 505 635  — Play Strike on the 11 HP Acid Slime
+[01:30:31.973]   [vision] attempt=0
+  [start] (520,880)→(512,880) Δ(-8,+0) conf=0.71 ✓
+  [end] (505,635)→(504,640) Δ(-1,+5) conf=0.91 ✓
+[01:30:31.975]   [exec] attempt=0  settle=0.50s  cmd=drag 512 880 504 640
+[01:30:35.064]   [result] attempt=0  screen=UNCHANGED  stable
+[01:30:35.562]   [vision] attempt=1
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(509,579) Δ(+4,-56) conf=0.59 ✓
+[01:30:35.564]   [exec] attempt=1  settle=0.55s  cmd=drag 520 880 509 561
+[01:30:38.712]   [result] attempt=1  screen=UNCHANGED  stable
+[01:30:39.180]   [vision] attempt=2
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(561,655) Δ(+56,+20) conf=0.55 ✓
+[01:30:39.181]   [exec] attempt=2  settle=0.60s  cmd=drag 520 880 579 655
+[01:30:42.363]   [result] attempt=2  screen=UNCHANGED  stable
+[01:30:42.833]   [vision] attempt=3
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(505,637) Δ(+0,+2) conf=0.95 ✓
+[01:30:42.835]   [exec] attempt=3  settle=0.65s  cmd=drag 520 880 487 637
+[01:30:46.076]   [result] attempt=3  screen=UNCHANGED  stable
+[01:30:46.553]   [vision] attempt=4
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(509,580) Δ(+4,-55) conf=0.65 ✓
+[01:30:46.555]   [exec] attempt=4  settle=0.70s  cmd=drag 520 880 509 598
+[01:30:49.823]   [result] attempt=4  screen=UNCHANGED  stable
+[01:30:50.319]   [vision] attempt=5
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(527,596) Δ(+22,-39) conf=0.98 ✓
+[01:30:50.321]   [exec] attempt=5  settle=0.75s  cmd=drag 520 880 545 578
+[01:30:53.693]   [result] attempt=5  screen=UNCHANGED  stable
+[01:30:54.160]   [vision] attempt=6
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(541,615) Δ(+36,-20) conf=0.99 ✓
+[01:30:54.162]   [exec] attempt=6  settle=0.80s  cmd=drag 520 880 523 597
+[01:30:57.533]   [result] attempt=6  screen=UNCHANGED  stable
+[01:30:58.003]   [vision] attempt=7
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(500,646) Δ(-5,+11) conf=0.62 ✓
+[01:30:58.005]   [exec] attempt=7  settle=0.85s  cmd=drag 520 880 500 628
+[01:31:01.433]   [result] attempt=7  screen=UNCHANGED  stable
+[01:31:01.898]   [vision] attempt=8
+  [start] (520,880)→(520,880) no shift conf=1.00 ✓
+  [end] (505,635)→(482,666) Δ(-23,+31) conf=0.95 ✓
+[01:31:01.900]   [exec] attempt=8  settle=0.90s  cmd=drag 520 880 500 666
+[01:31:05.392]   [result] attempt=8  screen=UNCHANGED  stable
+[01:31:05.875]   [vision] attempt=9
+  [start] (520,880)→(464,879) Δ(-56,-1) conf=0.95 ✓
+  [end] (505,635)→(512,691) Δ(+7,+56) conf=0.56 ✓
+[01:31:05.877]   [exec] attempt=9  settle=0.95s  cmd=drag 464 879 494 691
+[01:31:10.878]   [result] attempt=9  screen=CHANGED  stable
+[01:31:10.879]   [OK] action 2 after 10 attempt(s)
+[01:31:10.880] ACTION 3/6: drag 630 880 960 500  — Play Defend+ for 8 block
+[01:31:10.984]   [vision] attempt=0
+  [start] (630,880)→(574,897) Δ(-56,+17) conf=0.62 ✓
+  [end] (960,500)→(960,500) no shift conf=0.99 ✓
+[01:31:10.987]   [exec] attempt=0  settle=0.50s  cmd=drag 574 897 960 500
+[01:31:14.109]   [result] attempt=0  screen=CHANGED  stable
+[01:31:14.110]   [OK] action 3 after 1 attempt(s)
+[01:31:14.111] ACTION 4/6: drag 300 940 960 500  — Play Defend for 5 block
+[01:31:14.268]   [vision] attempt=0
+  [start] (300,940)→(300,940) no shift conf=1.00 ✓
+  [end] (960,500)→(960,500) no shift conf=1.00 ✓
+[01:31:14.273]   [exec] attempt=0  settle=0.50s  cmd=drag 300 940 960 500
+[01:31:17.418]   [result] attempt=0  screen=CHANGED  stable
+[01:31:17.420]   [OK] action 4 after 1 attempt(s)
+[01:31:17.422] ACTION 5/6: drag 410 910 960 500  — Play Survivor for 8 block; being the last card, no discard is required
+[01:31:17.537]   [vision] attempt=0
+  [start] (410,910)→(410,910) no shift conf=1.00 ✓
+  [end] (960,500)→(960,500) no shift conf=1.00 ✓
+[01:31:17.540]   [exec] attempt=0  settle=0.50s  cmd=drag 410 910 960 500
+[01:31:20.622]   [result] attempt=0  screen=UNCHANGED  stable
+[01:31:21.119]   [vision] attempt=1
+  [start] (410,910)→(410,910) no shift conf=1.00 ✓
+  [end] (960,500)→(879,401) Δ(-81,-99) conf=0.70 ✓
+[01:31:21.121]   [exec] attempt=1  settle=0.55s  cmd=drag 410 910 879 383
+[01:31:24.298]   [result] attempt=1  screen=CHANGED  stable
+[01:31:24.299]   [OK] action 5 after 2 attempt(s)
+[01:31:24.301] ACTION 6/6: click 1550 800  — End turn with 21 block vs 13 incoming damage
+[01:31:24.405]   [vision] attempt=0
+  [target] (1550,800)→(1550,800) no shift conf=0.98 ✓
+[01:31:24.408]   [exec] attempt=0  settle=0.50s  cmd=click 1550 800
+[01:31:26.277]   [result] attempt=0  screen=CHANGED  stable
+[01:31:26.278]   [OK] action 6 after 1 attempt(s)
+[01:31:26.384] STEP 4 SUMMARY: 6/6 succeeded, 0 failed (0% error rate), overall_screen_change=yes

@@ -1,0 +1,12 @@
+=== Execution Log — 2026-03-29 01:08:11 ===
+
+[01:08:11.202] test
+
+============================================================
+STEP 1  |  model=gemini-2.5-flash  target=GFN
+============================================================
+[01:08:11.204] ACTION 1/3: drag 300 680 615 430  — Play Strike
+[01:08:11.204]   [exec] attempt=0  settle=0.50s  cmd=drag 300 680 615 430
+[01:08:11.205]   [result] attempt=0  screen=UNCHANGED  stable
+[01:08:11.206]   [FAILED] action 1 after 21 attempt(s)
+[01:08:11.207] STEP 1 SUMMARY: 1/3 succeeded, 2 failed (66% error rate), overall_screen_change=no
