@@ -211,6 +211,9 @@ class LLMIntegration:
 
     def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str):
         """Call Gemini via the local CLI tool. Free but slower."""
+        if not re.match(r'^[\w\-\.]+$', model_name):
+            raise ValueError(f"Invalid model name format: {model_name}")
+
         temp_img_path = None
         temp_prompt_path = None
         try:
@@ -241,11 +244,16 @@ class LLMIntegration:
             )
             content = result.stdout.strip()
 
-            match = re.search(r'\{.*\}', content, re.DOTALL)
-            if not match:
+            # Clean up potential markdown wrappers
+            clean_content = re.sub(r'```(?:json)?', '', content).strip()
+            # Find the first { and the last }
+            start_idx = clean_content.find('{')
+            end_idx = clean_content.rfind('}')
+            if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
                 raise ValueError(f"No JSON object found in output. Raw output: {content}")
 
-            return json.loads(match.group(0))
+            json_str = clean_content[start_idx:end_idx + 1]
+            return json.loads(json_str)
         finally:
             for path in [temp_img_path, temp_prompt_path]:
                 if path and os.path.exists(path):
@@ -335,10 +343,14 @@ class LLMIntegration:
         content = data["choices"][0]["message"]["content"]
 
         # Parse JSON from content
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if not match:
+        clean_content = re.sub(r'```(?:json)?', '', content).strip()
+        start_idx = clean_content.find('{')
+        end_idx = clean_content.rfind('}')
+        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
             raise ValueError(f"No JSON in API response: {content[:300]}")
-        return json.loads(match.group(0))
+
+        json_str = clean_content[start_idx:end_idx + 1]
+        return json.loads(json_str)
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview"):
         try:
