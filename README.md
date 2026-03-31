@@ -94,8 +94,9 @@ backend/           Python (FastAPI + asyncio)
 
 1. Select your **LLM provider** and enter an API key (if required)
 2. Choose a **model** (e.g. `gemini-2.5-flash`)
-3. Select the **screen source** — a monitor or specific window
-4. Click **Start** and switch to your game
+3. Pick an **agent role** (see below)
+4. Select the **screen source** — a monitor or specific window
+5. Click **Start** and switch to your game
 
 The agent will:
 - Capture screenshots and analyze the game state
@@ -104,11 +105,25 @@ The agent will:
 - Wait for opponent turns automatically
 - Reflect after combats and adapt its strategy
 
+## Agent Roles
+
+Roles change **how** the agent interacts with the game — same core engine, different purpose.
+
+| Role | Purpose | Behaviour |
+|------|---------|-----------|
+| **Gamer** | Entertainment / content creation | Plays to win with smart strategy. Narrates its thought process naturally. |
+| **Reviewer** | Game critique / evaluation | Plays normally while evaluating design, UX, mechanics, difficulty, and polish. Notes positives and negatives. |
+| **QA Tester** | Bug hunting / quality assurance | Systematically explores UI, tries edge cases, stress-tests interactions, and logs anomalies with repro steps. |
+| **Speedrunner** | Optimization / efficiency | Minimizes actions and time. Skips optional content, prefers keyboard shortcuts, takes efficient paths. |
+
+Select the role from the dashboard dropdown before starting the agent. The role shapes the LLM's system prompt — no code changes needed to switch between roles.
+
 ## Configuration
 
 | Setting | Location | Description |
 |---------|----------|-------------|
 | Game objective | `Game Instructions.md` | What the agent should try to accomplish |
+| Agent role | Dashboard UI | How the agent approaches the game (Gamer, Reviewer, Tester, Speedrunner) |
 | LLM provider | Dashboard UI | Gemini CLI, Gemini API, or OpenRouter |
 | Screen source | Dashboard UI | Which monitor or window to watch |
 | API key | Dashboard UI | Entered at runtime, never stored on disk |

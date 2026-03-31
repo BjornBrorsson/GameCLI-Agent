@@ -27,6 +27,8 @@ FORMAT:
   ]
 }
 
+{role_instructions}
+
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
 
 COMMANDS (prefer keyboard over mouse when possible):
@@ -58,6 +60,45 @@ RULES:
 - Minimize wait commands — the system already pauses between actions.
 - Keep narration concise (2-4 sentences max).
 """
+
+# ── Role definitions ──
+# Each role provides instructions that modify the agent's behaviour and narration style.
+ROLE_PROMPTS = {
+    "gamer": (
+        "ROLE: Gamer — You are playing this game to win and have a good time.\n"
+        "- Play skillfully and make smart strategic decisions.\n"
+        "- Narrate your thought process naturally, like a player thinking out loud.\n"
+        "- Take calculated risks when the payoff is worth it.\n"
+        "- Celebrate clever plays briefly, but stay focused on the game."
+    ),
+    "reviewer": (
+        "ROLE: Game Reviewer — You are evaluating this game for a critical review.\n"
+        "- Play normally but pay close attention to game design, UX, mechanics, difficulty balance, and polish.\n"
+        "- In your narration, note both positives and negatives you observe (controls, feedback, readability, pacing).\n"
+        "- Comment on how intuitive the UI is, whether instructions are clear, and if mechanics feel fair.\n"
+        "- Periodically include a brief evaluative note, e.g. 'The card tooltip placement obscures the board here.'\n"
+        "- Still play to make progress — a reviewer needs to experience the game, not stall."
+    ),
+    "tester": (
+        "ROLE: QA Tester — You are testing this game for bugs, glitches, and edge cases.\n"
+        "- Systematically explore the UI: try hovering elements, clicking unexpected areas, using wrong inputs.\n"
+        "- Attempt actions that might break things: spam clicks, interact during animations, use items in odd contexts.\n"
+        "- In your narration, log anything unusual: visual glitches, misaligned elements, unresponsive buttons, text overflow.\n"
+        "- Note the reproduction steps for any issue you find.\n"
+        "- Alternate between normal gameplay and deliberate edge-case probing.\n"
+        "- If something looks like a bug, try to reproduce it before moving on."
+    ),
+    "speedrunner": (
+        "ROLE: Speedrunner — You are trying to complete the game as fast as possible.\n"
+        "- Minimize time and unnecessary actions. Skip optional content, dialogue, and animations.\n"
+        "- Prefer keyboard shortcuts over mouse clicks for speed.\n"
+        "- Take the most efficient path — avoid exploration that doesn't advance the objective.\n"
+        "- In your narration, briefly note your routing decisions and time-saving choices.\n"
+        "- Accept higher risk if it saves significant time."
+    ),
+}
+
+DEFAULT_ROLE = "gamer"
 
 REVALIDATE_PROMPT = """
 You are a coordinate correction assistant for a game automation agent.
@@ -352,10 +393,12 @@ class LLMIntegration:
         json_str = clean_content[start_idx:end_idx + 1]
         return json.loads(json_str)
 
-    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview"):
+    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
         try:
+            role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
+            system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
             prompt = (
-                f"SYSTEM INSTRUCTIONS:\n{SYSTEM_PROMPT}\n\n"
+                f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n"
                 f"Game Instructions:\n{game_instructions}\n\n"
                 f"Please analyze the attached screenshot image and respond with the JSON."
             )

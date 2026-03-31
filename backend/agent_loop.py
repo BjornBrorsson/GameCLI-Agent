@@ -82,13 +82,13 @@ class AgentLoop:
             print(f"  [!] _focus_window error: {e}")
         
     def start(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
-               provider: str = "gemini_cli"):
+               provider: str = "gemini_cli", role: str = "gamer"):
         if self.is_running:
             return False, "Agent is already running."
             
         self.is_running = True
         self.llm = None  # will be set in _loop; exposed for cost tracking
-        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider))
+        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role))
         return True, "Agent started."
         
     def stop(self):
@@ -133,7 +133,7 @@ class AgentLoop:
         return False
 
     async def _loop(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
-                     provider: str = "gemini_cli"):
+                     provider: str = "gemini_cli", role: str = "gamer"):
         # emit_log sends to WebSocket (user-facing)
         # _console_log sends to backend console only
         async def _console_log(msg):
@@ -177,7 +177,7 @@ class AgentLoop:
                 await _console_log(f"Step {step} - Analyzing with {model_name}... offset=({offset_x},{offset_y}) scale={scale:.2f}")
                 await emit_log(f"THINKING: Step {step} — analyzing screen...")
                 # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
-                response = await asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name)
+                response = await asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role)
                 
                 narration = response.get("narration", "No narration provided.")
                 raw_actions = response.get("actions", [])

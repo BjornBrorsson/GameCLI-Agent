@@ -1,9 +1,15 @@
 """
-GameState — Game phase detection, OCR-based state extraction, tiered memory,
-and win/loss detection for autonomous turn-based game play.
+GameState — Game-agnostic phase detection, OCR text extraction, tiered memory,
+and win/loss detection for autonomous game play.
 
-Provides structured game state information to the LLM prompt, dramatically
-improving decision quality over raw screenshot analysis alone.
+This module is deliberately game-agnostic. It provides:
+- OCR-based text extraction from screenshots
+- Lightweight phase detection using generic gaming keywords
+- A three-tier memory system (turn → encounter → session) using free-form observations
+- Terminal state detection (game over / victory)
+
+All game-specific knowledge should live in the user's Game Instructions,
+NOT in this module.
 """
 
 import re
@@ -11,7 +17,6 @@ import os
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 from PIL import Image
-import numpy as np
 
 try:
     import pytesseract
@@ -35,104 +40,85 @@ except ImportError:
     _TESSERACT_AVAILABLE = False
 
 
-# ── Game Phases ──
+# ── Game Phases (generic) ──
 
 class GamePhase:
     COMBAT = "combat"
-    MAP = "map"
-    CARD_REWARD = "card_reward"
-    REST_SITE = "rest_site"
-    SHOP = "shop"
-    EVENT = "event"
+    NAVIGATION = "navigation"
     MENU = "menu"
+    DIALOGUE = "dialogue"
+    REWARD = "reward"
+    SHOP = "shop"
     GAME_OVER = "game_over"
     VICTORY = "victory"
     UNKNOWN = "unknown"
 
 
-# Keywords that indicate specific game phases (case-insensitive OCR matching)
+# Keywords that indicate specific game phases (case-insensitive OCR matching).
+# These are deliberately generic — they should fire across many games.
 PHASE_KEYWORDS = {
     GamePhase.COMBAT: [
-        "end turn", "energy", "block", "intent", "strike", "defend",
-        "hp", "draw pile", "discard", "exhaust",
+        "hp", "health", "attack", "damage", "enemy", "fight",
+        "end turn", "battle", "hit", "miss", "block", "shield",
     ],
-    GamePhase.MAP: [
-        "map", "act ", "floor", "neow", "proceed",
+    GamePhase.NAVIGATION: [
+        "map", "proceed", "continue", "next", "travel", "explore",
+        "level", "stage", "world", "path",
     ],
-    GamePhase.CARD_REWARD: [
-        "choose a card", "card reward", "pick a card", "add to deck",
-        "skip", "bowl",
+    GamePhase.MENU: [
+        "menu", "settings", "options", "new game", "load", "save",
+        "quit", "resume", "pause",
     ],
-    GamePhase.REST_SITE: [
-        "rest", "smith", "upgrade", "recall", "dig", "lift",
-        "campfire",
+    GamePhase.DIALOGUE: [
+        "dialogue", "dialog", "choose", "choice", "accept", "refuse",
+        "speak", "talk", "reply",
+    ],
+    GamePhase.REWARD: [
+        "reward", "choose", "pick", "loot", "treasure", "item",
+        "upgrade", "unlock",
     ],
     GamePhase.SHOP: [
-        "shop", "purge", "buy", "gold", "price", "sold",
-    ],
-    GamePhase.EVENT: [
-        "choice", "event", "proceed", "leave", "accept", "refuse",
+        "shop", "buy", "sell", "price", "gold", "cost", "store",
     ],
     GamePhase.GAME_OVER: [
-        "defeat", "game over", "you died", "score", "killed by",
-        "defect destroyed", "ironclad fell", "silent fell", "watcher fell",
+        "game over", "defeat", "you died", "you lose", "killed",
+        "dead", "failed", "try again",
     ],
     GamePhase.VICTORY: [
-        "victory", "you win", "congratulations", "score", "heart killed",
-        "the end",
+        "victory", "you win", "congratulations", "completed",
+        "the end", "well done",
     ],
 }
 
 
-# ── Data Classes ──
-
-@dataclass
-class CombatState:
-    """Extracted state during combat phase."""
-    player_hp: Optional[int] = None
-    player_max_hp: Optional[int] = None
-    player_block: Optional[int] = None
-    energy_current: Optional[int] = None
-    energy_max: Optional[int] = None
-    hand_size: Optional[int] = None
-    enemies: List[Dict] = field(default_factory=list)  # [{name, hp, intent}]
-    floor_number: Optional[int] = None
-
+# ── Data Classes (game-agnostic) ──
 
 @dataclass
 class TurnMemory:
     """What happened during the current turn (reset each turn)."""
-    cards_played: List[str] = field(default_factory=list)
-    energy_spent: int = 0
-    damage_dealt: int = 0
-    block_gained: int = 0
     turn_number: int = 1
+    actions_taken: List[str] = field(default_factory=list)
+    observations: List[str] = field(default_factory=list)
 
 
 @dataclass
-class CombatMemory:
-    """What happened during the current combat (reset each combat)."""
+class EncounterMemory:
+    """What happened during the current encounter/combat (reset when encounter ends)."""
     turns_taken: int = 0
-    total_damage_dealt: int = 0
-    total_damage_taken: int = 0
-    cards_seen: List[str] = field(default_factory=list)
-    enemies_defeated: List[str] = field(default_factory=list)
-    combat_start_hp: Optional[int] = None
-    phase_transitions: int = 0  # how many times phase changed during combat
+    observations: List[str] = field(default_factory=list)
+    outcome: Optional[str] = None  # "won", "lost", or None while ongoing
 
 
 @dataclass
-class RunMemory:
-    """Persistent memory across the entire run."""
-    floor: int = 0
-    act: int = 1
-    combats_won: int = 0
-    combats_lost: int = 0
-    deck_notes: str = ""  # LLM-generated summary of deck archetype/strategy
-    relics_noted: List[str] = field(default_factory=list)
-    run_strategy: str = ""  # LLM-generated strategic direction
-    lessons: List[str] = field(default_factory=list)  # post-combat reflections
+class SessionMemory:
+    """Persistent memory across the entire play session."""
+    encounters_won: int = 0
+    encounters_lost: int = 0
+    strategy: str = ""  # LLM-generated strategic direction
+    lessons: List[str] = field(default_factory=list)  # post-encounter reflections
+    observations: List[str] = field(default_factory=list)  # notable things seen
     max_lessons: int = 10
+    max_observations: int = 20
 
 
 # ── OCR Helpers ──
@@ -143,26 +129,6 @@ def _ocr_full_screen(pil_img: Image.Image) -> str:
         return ""
     try:
         text = pytesseract.image_to_string(pil_img, config="--psm 6")
-        return text.strip().lower()
-    except Exception:
-        return ""
-
-
-def _ocr_region(pil_img: Image.Image, x1: int, y1: int, x2: int, y2: int) -> str:
-    """Run OCR on a specific region. Returns lowercased text."""
-    if not _TESSERACT_AVAILABLE:
-        return ""
-    try:
-        w, h = pil_img.size
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-        crop = pil_img.crop((x1, y1, x2, y2))
-        # Upscale small regions for better OCR accuracy
-        cw, ch = crop.size
-        if cw < 200 or ch < 50:
-            scale = max(200 / max(cw, 1), 50 / max(ch, 1), 2.0)
-            crop = crop.resize((int(cw * scale), int(ch * scale)), Image.Resampling.LANCZOS)
-        text = pytesseract.image_to_string(crop, config="--psm 7")
         return text.strip().lower()
     except Exception:
         return ""
@@ -212,10 +178,6 @@ def detect_phase(pil_img: Image.Image, ocr_text: str = "") -> Tuple[str, float]:
     best_phase = max(scores, key=scores.get)
     best_score = scores[best_phase]
     
-    # Combat gets a bonus if we see energy-like patterns (e.g. "3/3" near common positions)
-    if best_phase == GamePhase.COMBAT or "end turn" in text_lower:
-        best_score = min(1.0, best_score + 0.2)
-    
     return best_phase, best_score
 
 
@@ -231,191 +193,146 @@ def detect_game_over(pil_img: Image.Image, ocr_text: str = "") -> Optional[str]:
     return None
 
 
-# ── State Extraction ──
-
-def extract_combat_state(pil_img: Image.Image) -> CombatState:
-    """Extract structured combat state from a screenshot using OCR.
+def extract_screen_text(pil_img: Image.Image) -> str:
+    """Extract all readable text from the screenshot via OCR.
     
-    Attempts to read:
-    - Player HP (bottom-left area, format: "XX/XX")
-    - Energy (bottom-left, format: "X/X" in a circle)
-    - Enemy count and basic info
-    
-    Returns a CombatState with whatever could be extracted.
+    Returns the raw OCR text (lowercased). The LLM interprets
+    this in the context of whatever game is being played —
+    no game-specific parsing is done here.
     """
-    state = CombatState()
-    w, h = pil_img.size
-    
-    if not _TESSERACT_AVAILABLE:
-        return state
-    
-    # Player HP — typically bottom-center-left area
-    # In Slay the Spire: roughly x=50-200, y=h*0.85-h*0.95
-    hp_region = _ocr_region(pil_img, 0, int(h * 0.82), int(w * 0.2), int(h * 0.98))
-    hp_match = re.search(r'(\d+)\s*/\s*(\d+)', hp_region)
-    if hp_match:
-        state.player_hp = int(hp_match.group(1))
-        state.player_max_hp = int(hp_match.group(2))
-    
-    # Energy — typically far bottom-left, a circle with "X/X"
-    energy_region = _ocr_region(pil_img, 0, int(h * 0.70), int(w * 0.12), int(h * 0.90))
-    energy_match = re.search(r'(\d)\s*/\s*(\d)', energy_region)
-    if energy_match:
-        state.energy_current = int(energy_match.group(1))
-        state.energy_max = int(energy_match.group(2))
-    
-    # Floor number — typically top-left or top-center
-    floor_region = _ocr_region(pil_img, 0, 0, int(w * 0.3), int(h * 0.08))
-    floor_match = re.search(r'floor\s*(\d+)', floor_region)
-    if floor_match:
-        state.floor_number = int(floor_match.group(1))
-    
-    # Block — shown as a shield icon near the player, bottom-center
-    block_region = _ocr_region(pil_img, int(w * 0.15), int(h * 0.75), int(w * 0.35), int(h * 0.90))
-    block_match = re.search(r'(\d+)', block_region)
-    if block_match and state.player_hp is not None:
-        # Only trust block reading if we also found HP (confirms combat screen)
-        candidate = int(block_match.group(1))
-        if candidate < 200:  # sanity check
-            state.player_block = candidate
-    
-    return state
+    return _ocr_full_screen(pil_img)
 
 
 # ── Tiered Memory Manager ──
 
 class GameMemory:
-    """Manages tiered memory: turn → combat → run.
+    """Manages tiered memory: turn → encounter → session.
     
     Turn memory resets when a new turn starts.
-    Combat memory resets when combat ends (phase changes to non-combat).
-    Run memory persists across the entire session.
+    Encounter memory resets when the encounter ends (phase changes away from combat).
+    Session memory persists across the entire play session.
     """
     
     def __init__(self):
         self.turn = TurnMemory()
-        self.combat = CombatMemory()
-        self.run = RunMemory()
+        self.encounter = EncounterMemory()
+        self.session = SessionMemory()
         self._last_phase = GamePhase.UNKNOWN
-        self._combat_active = False
+        self._in_encounter = False
     
-    def update_phase(self, new_phase: str, combat_state: Optional[CombatState] = None):
+    def update_phase(self, new_phase: str):
         """Called each step with the detected phase. Manages memory transitions."""
-        was_combat = self._combat_active
-        is_combat = new_phase == GamePhase.COMBAT
+        was_encounter = self._in_encounter
+        is_encounter = new_phase == GamePhase.COMBAT
         
-        # Combat just started
-        if is_combat and not was_combat:
-            self._start_combat(combat_state)
+        # Encounter just started
+        if is_encounter and not was_encounter:
+            self._start_encounter()
         
-        # Combat just ended
-        if was_combat and not is_combat:
-            self._end_combat(new_phase)
+        # Encounter just ended
+        if was_encounter and not is_encounter:
+            self._end_encounter(new_phase)
         
-        self._combat_active = is_combat
+        self._in_encounter = is_encounter
         self._last_phase = new_phase
     
-    def _start_combat(self, state: Optional[CombatState] = None):
-        """Reset combat and turn memory for a new fight."""
-        self.combat = CombatMemory()
+    def _start_encounter(self):
+        """Reset encounter and turn memory for a new encounter."""
+        self.encounter = EncounterMemory()
         self.turn = TurnMemory()
-        if state and state.player_hp is not None:
-            self.combat.combat_start_hp = state.player_hp
     
-    def _end_combat(self, new_phase: str):
-        """Archive combat results into run memory."""
-        self.run.combats_won += 1
-        self.run.floor += 1
+    def _end_encounter(self, new_phase: str):
+        """Archive encounter results into session memory."""
+        terminal = new_phase in (GamePhase.GAME_OVER,)
+        if terminal:
+            self.encounter.outcome = "lost"
+            self.session.encounters_lost += 1
+        else:
+            self.encounter.outcome = "won"
+            self.session.encounters_won += 1
     
     def record_turn_end(self):
         """Called when the agent ends its turn."""
-        self.combat.turns_taken += 1
+        self.encounter.turns_taken += 1
         self.turn = TurnMemory(turn_number=self.turn.turn_number + 1)
     
-    def record_card_played(self, card_name: str, energy_cost: int = 0):
-        """Record a card being played in the current turn."""
-        self.turn.cards_played.append(card_name)
-        self.turn.energy_spent += energy_cost
-        if card_name not in self.combat.cards_seen:
-            self.combat.cards_seen.append(card_name)
+    def record_action(self, action_description: str):
+        """Record an action taken during the current turn."""
+        self.turn.actions_taken.append(action_description)
+    
+    def record_observation(self, observation: str, scope: str = "turn"):
+        """Record an observation at the specified scope (turn, encounter, or session)."""
+        if scope == "turn":
+            self.turn.observations.append(observation)
+        elif scope == "encounter":
+            self.encounter.observations.append(observation)
+        elif scope == "session":
+            self.session.observations.append(observation)
+            if len(self.session.observations) > self.session.max_observations:
+                self.session.observations.pop(0)
     
     def record_game_over(self, result: str):
         """Record game over (defeat or victory)."""
         if result == "defeat":
-            self.run.combats_lost += 1
-        elif result == "victory":
-            pass  # Run completed
+            self.encounter.outcome = "lost"
+            self.session.encounters_lost += 1
     
     def add_lesson(self, lesson: str):
-        """Add a post-combat reflection to run memory."""
-        self.run.lessons.append(lesson)
-        if len(self.run.lessons) > self.run.max_lessons:
-            self.run.lessons.pop(0)
+        """Add a post-encounter reflection to session memory."""
+        self.session.lessons.append(lesson)
+        if len(self.session.lessons) > self.session.max_lessons:
+            self.session.lessons.pop(0)
     
-    def update_run_strategy(self, strategy: str):
-        """Update the run-level strategic direction."""
-        self.run.run_strategy = strategy
+    def update_strategy(self, strategy: str):
+        """Update the session-level strategic direction."""
+        self.session.strategy = strategy
     
-    def update_deck_notes(self, notes: str):
-        """Update notes about deck composition/archetype."""
-        self.run.deck_notes = notes
-    
-    def format_for_prompt(self, phase: str, combat_state: Optional[CombatState] = None) -> str:
+    def format_for_prompt(self, phase: str, ocr_text: str = "") -> str:
         """Format all relevant memory tiers into a text block for the LLM prompt."""
         sections = []
         
-        # Run-level context (always included)
-        run_parts = []
-        if self.run.floor > 0:
-            run_parts.append(f"Floor: {self.run.floor}, Act: {self.run.act}")
-        if self.run.combats_won > 0:
-            run_parts.append(f"Combats won: {self.run.combats_won}")
-        if self.run.run_strategy:
-            run_parts.append(f"Strategy: {self.run.run_strategy}")
-        if self.run.deck_notes:
-            run_parts.append(f"Deck: {self.run.deck_notes}")
-        if self.run.lessons:
-            # Show last 3 lessons
-            recent = self.run.lessons[-3:]
-            run_parts.append(f"Lessons learned: {'; '.join(recent)}")
-        if run_parts:
-            sections.append("RUN CONTEXT:\n" + "\n".join(f"  {p}" for p in run_parts))
+        # Session-level context (always included)
+        session_parts = []
+        if self.session.encounters_won > 0 or self.session.encounters_lost > 0:
+            session_parts.append(f"Encounters won: {self.session.encounters_won}, lost: {self.session.encounters_lost}")
+        if self.session.strategy:
+            session_parts.append(f"Strategy: {self.session.strategy}")
+        if self.session.lessons:
+            recent = self.session.lessons[-3:]
+            session_parts.append(f"Lessons: {'; '.join(recent)}")
+        if self.session.observations:
+            recent_obs = self.session.observations[-3:]
+            session_parts.append(f"Notes: {'; '.join(recent_obs)}")
+        if session_parts:
+            sections.append("SESSION CONTEXT:\n" + "\n".join(f"  {p}" for p in session_parts))
         
-        # Combat-level context (only during combat)
+        # Encounter-level context (only during encounters)
         if phase == GamePhase.COMBAT:
-            combat_parts = []
-            if self.combat.turns_taken > 0:
-                combat_parts.append(f"Combat turn: {self.turn.turn_number} (total turns: {self.combat.turns_taken})")
-            if self.combat.combat_start_hp is not None:
-                combat_parts.append(f"HP at combat start: {self.combat.combat_start_hp}")
-            if self.combat.enemies_defeated:
-                combat_parts.append(f"Enemies defeated this combat: {', '.join(self.combat.enemies_defeated)}")
-            if combat_parts:
-                sections.append("COMBAT CONTEXT:\n" + "\n".join(f"  {p}" for p in combat_parts))
+            enc_parts = []
+            if self.encounter.turns_taken > 0:
+                enc_parts.append(f"Encounter turn: {self.turn.turn_number} (total: {self.encounter.turns_taken})")
+            if self.encounter.observations:
+                recent_obs = self.encounter.observations[-3:]
+                enc_parts.append(f"Notes: {'; '.join(recent_obs)}")
+            if enc_parts:
+                sections.append("ENCOUNTER CONTEXT:\n" + "\n".join(f"  {p}" for p in enc_parts))
             
             # Turn-level context
             turn_parts = []
-            if self.turn.cards_played:
-                turn_parts.append(f"Cards played this turn: {', '.join(self.turn.cards_played)}")
-                turn_parts.append(f"Energy spent this turn: {self.turn.energy_spent}")
+            if self.turn.actions_taken:
+                turn_parts.append(f"Actions this turn: {', '.join(self.turn.actions_taken)}")
+            if self.turn.observations:
+                turn_parts.append(f"Observations: {'; '.join(self.turn.observations)}")
             if turn_parts:
                 sections.append("TURN CONTEXT:\n" + "\n".join(f"  {p}" for p in turn_parts))
-            
-            # OCR-extracted state
-            if combat_state:
-                state_parts = []
-                if combat_state.player_hp is not None:
-                    hp_str = f"{combat_state.player_hp}/{combat_state.player_max_hp}" if combat_state.player_max_hp else str(combat_state.player_hp)
-                    state_parts.append(f"Player HP: {hp_str}")
-                if combat_state.player_block is not None and combat_state.player_block > 0:
-                    state_parts.append(f"Block: {combat_state.player_block}")
-                if combat_state.energy_current is not None:
-                    energy_str = f"{combat_state.energy_current}/{combat_state.energy_max}" if combat_state.energy_max else str(combat_state.energy_current)
-                    state_parts.append(f"Energy: {energy_str}")
-                if combat_state.floor_number is not None:
-                    state_parts.append(f"Floor: {combat_state.floor_number}")
-                if state_parts:
-                    sections.append("DETECTED STATE (from OCR — verify against screenshot):\n" + "\n".join(f"  {p}" for p in state_parts))
+        
+        # OCR text (if available, let the LLM interpret it)
+        if ocr_text:
+            # Truncate to avoid token bloat
+            truncated = ocr_text[:500]
+            if len(ocr_text) > 500:
+                truncated += "..."
+            sections.append(f"SCREEN TEXT (from OCR — may contain errors):\n  {truncated}")
         
         if not sections:
             return ""
@@ -423,66 +340,58 @@ class GameMemory:
         return "\n\n".join(sections) + "\n"
 
 
-# ── Phase-Specific Prompt Addenda ──
+# ── Phase-Specific Prompt Addenda (generic) ──
 
 PHASE_PROMPTS = {
     GamePhase.COMBAT: """
-PHASE: COMBAT
-You are in combat. Key priorities:
-1. Assess threats: check enemy intents (attack values, debuffs) and your HP/block.
-2. Plan energy usage: count your energy and card costs before committing.
-3. Play cards in optimal order: debuffs/buffs before attacks, block if needed.
-4. You MUST end your turn when done — click End Turn or press the appropriate key.
-5. After ending turn, if opponent needs time to act, use 'yield' to wait.
-6. Do NOT replay cards you already played this turn (check TURN CONTEXT above).
+PHASE: COMBAT / ENCOUNTER
+You are in an active encounter or battle.
+1. Assess the situation: check your health, resources, and what the opponent is doing.
+2. Plan your actions before committing — consider what options are available.
+3. End your turn when you have no more useful actions to take.
+4. After ending your turn, use 'wait' if the game needs time to process.
 """,
-    GamePhase.MAP: """
-PHASE: MAP NAVIGATION
-You are on the map screen choosing your next path.
-1. Consider your current HP — avoid elites if low HP.
-2. Prioritize rest sites if HP is critical (below 30%).
-3. Question mark (?) nodes can be events, merchants, or fights.
-4. Plan 2-3 nodes ahead, not just the immediate next node.
-5. Click your chosen node to proceed.
+    GamePhase.NAVIGATION: """
+PHASE: NAVIGATION
+You are navigating — choosing where to go next.
+1. Consider your current state (health, resources) when picking a path.
+2. Follow the game objective from your instructions.
+3. Click or interact with the destination to proceed.
 """,
-    GamePhase.CARD_REWARD: """
-PHASE: CARD REWARD
-You are choosing a card reward after winning combat.
-1. Consider your deck archetype and strategy.
-2. Avoid taking cards that don't fit your build — a lean deck is often better.
-3. Skip if none of the cards improve your deck meaningfully.
-4. Click a card to add it, or click Skip to pass.
+    GamePhase.MENU: """
+PHASE: MENU
+You are on a menu screen.
+1. Look for the option that advances the game (e.g. New Game, Continue, Start).
+2. If this is a settings/options screen, navigate back to gameplay.
 """,
-    GamePhase.REST_SITE: """
-PHASE: REST SITE
-You are at a campfire rest site.
-1. REST (heal 30% max HP) if your HP is below 60%.
-2. SMITH (upgrade a card) if your HP is healthy — upgrades are very valuable.
-3. Other options (Recall, Dig, Lift) depend on relics — use them if available and beneficial.
+    GamePhase.DIALOGUE: """
+PHASE: DIALOGUE / EVENT
+You are in a dialogue or event with choices.
+1. Read all options carefully before choosing.
+2. Consider your current state and resources when evaluating risks.
+3. Pick the option that best serves your objective.
+""",
+    GamePhase.REWARD: """
+PHASE: REWARD / SELECTION
+You are being offered a reward or making a selection.
+1. Evaluate each option based on your current strategy and needs.
+2. Pick what strengthens your position most — or skip if nothing helps.
 """,
     GamePhase.SHOP: """
 PHASE: SHOP
-You are in the shop.
-1. Card removal (purge) is very valuable — remove Strikes and Defends.
-2. Only buy cards that fit your deck strategy.
-3. Save gold for critical purchases (relics, removals).
-4. Click Leave/Exit when done shopping.
-""",
-    GamePhase.EVENT: """
-PHASE: EVENT
-You are at a random event with choices.
-1. Read all options carefully before choosing.
-2. Consider your current HP and resources when evaluating risks.
-3. Some events have hidden outcomes — if unsure, choose the safe option.
+You are in a shop or store.
+1. Only spend resources on items that meaningfully help your objective.
+2. Conserve resources for critical purchases.
+3. Leave when done.
 """,
     GamePhase.GAME_OVER: """
 PHASE: GAME OVER
-The game has ended in defeat. Look for a button to return to the main menu,
-start a new run, or view the score screen. Click the appropriate button.
+The game has ended. Look for a button to return to the main menu,
+start a new run, or view results. Click the appropriate button.
 """,
     GamePhase.VICTORY: """
 PHASE: VICTORY
-You won the game! Look for a button to view your score, continue, or return
+You won! Look for a button to view results, continue, or return
 to the main menu.
 """,
 }

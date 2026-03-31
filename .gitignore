@@ -1,1 +1,52 @@
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Environment & secrets
+.env
+
+# Temp / scratch files
+.tmp/
+backend/.tmp/
+*.tmp
+
+# Runtime data (logs, session narration)
+backend/Logs/
+backend/Narration/
+
+# Personal scratch files
+*.log
+data.txt
+data file.txt
+p.txt
+test.txt
+test_p.txt
+test_p_multi.txt
+test_prompt.txt
+gemini_help.txt
+img.png
+
+# User-specific game instructions (template is tracked)
+Game Instructions.md
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

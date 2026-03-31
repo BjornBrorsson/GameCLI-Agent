@@ -7,6 +7,13 @@ const PROVIDERS = [
   { id: 'openrouter', label: 'OpenRouter', needsKey: true },
 ];
 
+const ROLES = [
+  { id: 'gamer', label: 'Gamer', desc: 'Play to win with smart strategy' },
+  { id: 'reviewer', label: 'Reviewer', desc: 'Evaluate game design, UX, and mechanics' },
+  { id: 'tester', label: 'QA Tester', desc: 'Hunt for bugs, glitches, and edge cases' },
+  { id: 'speedrunner', label: 'Speedrunner', desc: 'Complete the game as fast as possible' },
+];
+
 function App() {
   const [provider, setProvider] = useState('gemini_cli');
   const [apiKey, setApiKey] = useState('');
@@ -19,6 +26,7 @@ function App() {
   const [targetType, setTargetType] = useState('monitor');
   const [targetName, setTargetName] = useState('Monitor 1');
   const [instructions, setInstructions] = useState('');
+  const [role, setRole] = useState('gamer');
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -224,7 +232,8 @@ function App() {
           target_name: targetName,
           model_name: modelToUse,
           instructions: instructions,
-          provider: provider
+          provider: provider,
+          role: role
         })
       });
       
@@ -416,6 +425,11 @@ function App() {
                   ? sources.monitors.map((m, i) => <option key={`mon-${i}`} value={m}>{m}</option>)
                   : sources.windows.map((w, i) => <option key={`win-${i}`} value={w}>{w}</option>)
                 }
+              </select>
+
+              <label>Agent Role</label>
+              <select value={role} onChange={e => setRole(e.target.value)}>
+                {ROLES.map(r => <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>)}
               </select>
 
               <label>Game Instructions (Markdown)</label>
