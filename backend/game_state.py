@@ -274,8 +274,15 @@ class GameMemory:
     def record_game_over(self, result: str):
         """Record game over (defeat or victory)."""
         if result == "defeat":
+            # Only increment loss counter if this encounter wasn't already counted as lost
+            # (e.g., to avoid double-counting when _end_encounter already handled it)
+            if self.encounter.outcome != "lost":
+                self.session.encounters_lost += 1
             self.encounter.outcome = "lost"
-            self.session.encounters_lost += 1
+        elif result == "victory":
+            # Victory is already handled by _end_encounter for the final encounter
+            # This call is mainly for session-level tracking if needed
+            pass
     
     def add_lesson(self, lesson: str):
         """Add a post-encounter reflection to session memory."""
