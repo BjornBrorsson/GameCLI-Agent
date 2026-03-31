@@ -136,9 +136,12 @@ Session logs are saved locally (git-ignored):
 
 ## Tested With
 
-- Slay the Spire
+- Slay the Spire (locally + GeForce Now Streaming)
+- Heroes 3 HD (locally)
+- Metroplex Zero (locally)
+- Slay The Spire 2 (locally + GeForce Now Streaming)
 
-The agent is designed to be game-agnostic for turn-based games, but has primarily been tested with Slay the Spire. Contributions for other games are welcome.
+The agent is designed to be game-agnostic for turn-based games, but has primarily been tested with Slay the Spire. Contributions are welcome.
 
 ## License
 
