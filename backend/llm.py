@@ -141,6 +141,30 @@ FORMAT:
 }
 """
 
+AUTODREAM_PROMPT = """
+You are a background memory consolidation assistant.
+
+Your task is to analyze a list of raw observations recorded by an autonomous agent
+playing a game, and compress them into a shorter, concise list of essential facts.
+The goal is to prevent the agent's context window from bloating over long sessions.
+
+INSTRUCTIONS:
+1. Merge duplicate or highly similar observations.
+2. Remove outdated or contradictory observations (e.g., if earlier it says "I have 50 HP" and later "I have 20 HP", keep the latter or synthesize to "HP is dropping").
+3. Keep strategic insights, important items seen, and significant state changes.
+4. Drop trivial, repetitive step-by-step narration unless it forms a pattern.
+5. Return the result as a JSON array of strings. No markdown, no backticks, no other text.
+
+FORMAT (JSON only):
+{
+  "consolidated_observations": [
+    "Enemy is weak to fire.",
+    "Health is low (20 HP).",
+    "Acquired the Iron Key."
+  ]
+}
+"""
+
 RETRY_ASSIST_PROMPT = """
 You are a game automation assistant debugging a failed action.
 
@@ -440,6 +464,31 @@ class LLMIntegration:
         except Exception as e:
             print(f"[retry-assist] Error: {e}")
             return None
+
+    def consolidate_memory(self, observations: list[str], model_name: str = "gemini-2.5-flash-lite") -> list[str]:
+        """Background memory consolidation (AutoDream).
+        Sends raw observations to a cheaper LLM to summarize and deduplicate.
+        """
+        if not observations:
+            return []
+
+        obs_text = "\n".join(f"- {obs}" for obs in observations)
+        prompt = (
+            f"SYSTEM INSTRUCTIONS:\n{AUTODREAM_PROMPT}\n\n"
+            f"RAW OBSERVATIONS TO CONSOLIDATE:\n{obs_text}\n"
+        )
+
+        # We don't need an image for this, but the API might expect one.
+        # Let's pass a dummy 1x1 pixel base64 image just to satisfy the routing layer.
+        # 1x1 white pixel in base64:
+        dummy_img_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+
+        try:
+            result = self._call(prompt, dummy_img_b64, model_name)
+            return result.get("consolidated_observations", [])
+        except Exception as e:
+            print(f"[autodream] Error consolidating memory: {e}")
+            return observations  # fallback to original if it fails
 
     def revalidate_actions(self, image_base64: str, remaining_actions: list,
                            game_instructions: str, model_name: str):
