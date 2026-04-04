@@ -241,6 +241,7 @@ class AgentLoop:
                     is_drag = action_type == "drag"
                     is_keyboard = action_type in ("press", "hold_key", "release_key", "type")
                     is_wait = action_type == "wait"
+                    is_macro = action_type == "run_macro"
 
                     # `wait` commands always succeed — no screen change expected
                     if is_wait:
@@ -252,6 +253,23 @@ class AgentLoop:
                         attempt_counts.append(1)
                         exec_log.log_action_outcome(action_index + 1, True, 1)
                         action_index += 1
+                        continue
+
+                    # `run_macro` commands bypass vision verification
+                    if is_macro:
+                        exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale)
+                        # Run the macro and then wait for screen stability
+                        await asyncio.to_thread(self.input_controller.execute_action, cmd, offset_x, offset_y, scale)
+                        stable = await self._wait_for_stable(target_type, target_name, timeout=4.0, interval=0.4)
+                        exec_log.log_result(0, True, stable)
+                        await _console_log(f"  ✓ Macro {cmd} completed")
+                        total_actions += 1
+                        attempt_counts.append(1)
+                        exec_log.log_action_outcome(action_index + 1, True, 1)
+                        action_index += 1
+                        overall_changed = True # Assume macro did something
+                        # Update after_pil so that following actions can be revalidated
+                        after_pil = await asyncio.to_thread(self.screen_capture.capture_fresh, target_type, target_name)
                         continue
 
                     if is_drag:
@@ -376,7 +394,7 @@ class AgentLoop:
                                             # Recompute max_retries for new action type
                                             action_type = cmd.split()[0].lower()
                                             is_drag = action_type == "drag"
-                                            is_keyboard = action_type in ("press", "hold_key", "release_key", "type", "wait")
+                                            is_keyboard = action_type in ("press", "hold_key", "release_key", "type", "wait", "run_macro")
                                             if is_drag:
                                                 max_retries = MAX_RETRIES_DRAG
                                             elif is_keyboard:

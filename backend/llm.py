@@ -40,6 +40,7 @@ COMMANDS (prefer keyboard over mouse when possible):
 - scroll x y amount — mouse wheel (positive=up, negative=down). For zoom, lists.
 - hover x y — move cursor without clicking. For tooltips, inspection.
 - wait seconds — pause (decimal ok, e.g. 0.5). ONLY when the game needs time for animations.
+- run_macro macro_name — run a pre-recorded sequence of actions (e.g., standard opening combat turns or menu navigation).
 
 KEYBOARD SHORTCUTS — USE THEM:
 - ALWAYS prefer keyboard shortcuts over clicking when they exist.

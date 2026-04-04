@@ -33,6 +33,9 @@ function App() {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sessionCost, setSessionCost] = useState(null);
+  const [isRecordingMacro, setIsRecordingMacro] = useState(false);
+  const [macroNameInput, setMacroNameInput] = useState('');
+  const [macrosList, setMacrosList] = useState([]);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -45,6 +48,7 @@ function App() {
     fetchInstructions();
     checkStatus();
     connectWebSocket();
+    fetchMacros();
 
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -181,7 +185,54 @@ function App() {
       const data = await res.json();
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
+      setIsRecordingMacro(data.is_recording_macro || false);
     } catch (e) {}
+  };
+
+  const fetchMacros = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/macros');
+      const data = await res.json();
+      setMacrosList(data.macros || []);
+    } catch (e) {
+      console.error("Failed to fetch macros", e);
+    }
+  };
+
+  const handleToggleMacroRecording = async () => {
+    if (isRecordingMacro) {
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/stop_recording', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(false);
+          setMacroNameInput('');
+          fetchMacros(); // Refresh list
+        }
+      } catch (e) {
+        console.error("Failed to stop macro recording", e);
+      }
+    } else {
+      if (!macroNameInput.trim()) {
+        alert('Please enter a macro name before recording.');
+        return;
+      }
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/start_recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ macro_name: macroNameInput.trim() })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(true);
+        } else {
+          alert('Failed to start recording: ' + data.message);
+        }
+      } catch (e) {
+        console.error("Failed to start macro recording", e);
+      }
+    }
   };
 
   const connectWebSocket = () => {
@@ -443,7 +494,7 @@ function App() {
                 <button
                   className="btn-start"
                   onClick={handleStart}
-                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel)}
+                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel) || isRecordingMacro}
                 >
                   Start Agent
                 </button>
@@ -470,6 +521,49 @@ function App() {
                   : <div className="preview-placeholder">No preview available. Select a target and click Refresh.</div>
                 }
               </div>
+            </div>
+
+            <div className="card">
+              <h2>Watch Me Play (Macro Recording)</h2>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <input
+                  type="text"
+                  placeholder="Macro Name (e.g., start_battle)"
+                  value={macroNameInput}
+                  onChange={(e) => setMacroNameInput(e.target.value)}
+                  disabled={isRecordingMacro}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={handleToggleMacroRecording}
+                  style={{
+                    backgroundColor: isRecordingMacro ? 'var(--danger)' : 'var(--success)',
+                    color: 'white',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {isRecordingMacro ? 'Stop Recording' : 'Start Recording'}
+                </button>
+              </div>
+
+              {isRecordingMacro && (
+                <div style={{ color: 'var(--danger)', fontSize: '0.85rem', marginBottom: '1rem', animation: 'pulse 1s infinite' }}>
+                  🔴 Recording... Perform actions in the game now.
+                </div>
+              )}
+
+              <label>Saved Macros</label>
+              {macrosList.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No macros saved yet.</div>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  {macrosList.map((m, i) => <li key={i}>{m}</li>)}
+                </ul>
+              )}
             </div>
           </div>
         </div>

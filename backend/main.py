@@ -15,6 +15,7 @@ except ImportError:
 
 from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
+from macro_recorder import recorder
 
 app = FastAPI()
 
@@ -134,7 +135,24 @@ async def abort_agent():
 
 @app.get("/api/status")
 def get_status():
-    return {"is_running": agent.is_running, "is_paused": agent.is_paused}
+    return {"is_running": agent.is_running, "is_paused": agent.is_paused, "is_recording_macro": recorder.recording}
+
+class MacroStartRequest(BaseModel):
+    macro_name: str
+
+@app.post("/api/macros/start_recording")
+async def start_macro_recording(req: MacroStartRequest):
+    success, msg = recorder.start_recording(req.macro_name)
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.post("/api/macros/stop_recording")
+async def stop_macro_recording():
+    success, msg = recorder.stop_recording()
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.get("/api/macros")
+def get_macros():
+    return {"macros": list(recorder.get_macros().keys())}
 
 # ── Gemini CLI fallback model list (no API key needed) ──
 GEMINI_CLI_MODELS = [

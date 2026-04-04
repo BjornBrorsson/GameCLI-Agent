@@ -119,10 +119,82 @@ def _click_at(x, y, down_flag, up_flag):
 
 # -------------------------------------------------------------------
 
+import json
+import os
+
+MACROS_FILE = os.path.join(os.path.dirname(__file__), "..", "macros.json")
+
 class InputController:
     def __init__(self):
         pydirectinput.PAUSE = 0.02
         
+    def _run_macro(self, macro_name: str, offset_x: int, offset_y: int, scale: float):
+        """Loads and executes a saved macro sequence."""
+        if not os.path.exists(MACROS_FILE):
+            print(f"  [!] Macro file not found: {MACROS_FILE}")
+            return
+
+        try:
+            with open(MACROS_FILE, "r", encoding="utf-8") as f:
+                macros = json.load(f)
+        except json.JSONDecodeError:
+            print("  [!] Failed to parse macros.json")
+            return
+
+        if macro_name not in macros:
+            print(f"  [!] Macro not found: {macro_name}")
+            return
+
+        events = macros[macro_name]
+        print(f"  [macro] Executing '{macro_name}' ({len(events)} events)")
+
+        for event in events:
+            # Replay timing
+            delay = event.get("delay", 0)
+            if delay > 0:
+                time.sleep(delay)
+
+            e_type = event.get("type")
+            action = event.get("action")
+
+            if e_type == "mouse_click":
+                # Translate coordinates back to current window space
+                # Assuming recorded coords were absolute. If we need them relative, we'd adjust here.
+                # For simplicity, we assume they need to be played back at the translated coords if possible,
+                # but standard pynput gives absolute screen coords. We will just replay them exactly as recorded
+                # if we can't easily relative-ize them without recording window pos.
+                # Since we don't have recorded window pos, we just replay absolute.
+                x, y = event.get("x", 0), event.get("y", 0)
+                btn = event.get("button", "left").replace("Button.", "")
+
+                flags_down = MOUSEEVENTF_LEFTDOWN
+                flags_up = MOUSEEVENTF_LEFTUP
+                if btn == "right":
+                    flags_down = MOUSEEVENTF_RIGHTDOWN
+                    flags_up = MOUSEEVENTF_RIGHTUP
+                elif btn == "middle":
+                    flags_down = MOUSEEVENTF_MIDDLEDOWN
+                    flags_up = MOUSEEVENTF_MIDDLEUP
+
+                _move_to(x, y)
+                if action == "down":
+                    _send_button(flags_down)
+                elif action == "up":
+                    _send_button(flags_up)
+
+            elif e_type == "mouse_scroll":
+                x, y = event.get("x", 0), event.get("y", 0)
+                dy = event.get("dy", 0)
+                _move_to(x, y)
+                _send_button(MOUSEEVENTF_WHEEL, mouse_data=int(dy * WHEEL_DELTA))
+
+            elif e_type == "key_press":
+                key = event.get("key", "")
+                if action == "down":
+                    pydirectinput.keyDown(key)
+                elif action == "up":
+                    pydirectinput.keyUp(key)
+
     def _translate(self, x: int, y: int, offset_x: int, offset_y: int, scale: float) -> tuple:
         """Translate image-space coords to absolute screen coords."""
         abs_x = int(x * scale) + offset_x
@@ -221,6 +293,9 @@ class InputController:
             elif cmd == "wait" and len(parts) >= 2:
                 sec = float(parts[1])
                 time.sleep(sec)
+            elif cmd == "run_macro" and len(parts) >= 2:
+                macro_name = parts[1]
+                self._run_macro(macro_name, offset_x, offset_y, scale)
             else:
                 print(f"Unknown or malformed command: {action_string}")
         except Exception as e:
