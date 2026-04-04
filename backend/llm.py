@@ -15,7 +15,7 @@ SYSTEM_PROMPT = """
 You are an autonomous AI playing a video game via screenshot analysis and synthetic input.
 
 INPUT: A screenshot of the current game state + the user's Game Instructions.
-The screenshot has YELLOW COORDINATE RULERS on all four edges — use these to measure positions precisely.
+The screenshot has NUMBERED BOUNDING BOXES over interactive elements. Use the target_id of the element to interact with it.
 OUTPUT: JSON only. No markdown, no backticks, no text outside the JSON.
 
 FORMAT:
@@ -23,22 +23,25 @@ FORMAT:
   "narration": "Brief calm analysis: what you see, your options, why you chose these actions. Internal monologue only. No greetings, hype, sign-offs, or exclamation marks.",
   "actions": [
     {"command": "press enter", "reason": "Confirm selection using keyboard"},
-    {"command": "click 1450 780", "reason": "Click the End Turn button"}
+    {"command": "click", "target_id": 4, "reason": "Click the End Turn button"},
+    {"command": "drag", "source_id": 2, "target_id": 5, "reason": "Drag item 2 to slot 5"}
   ]
 }
 
 {role_instructions}
 
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
+For mouse actions that target an element on the screen, use "target_id". For drag actions, use "source_id" and "target_id".
+If no bounding box is present for the location you want to interact with, you may still use coordinates by formatting the command as a string like "click x y". However, you should strongly prefer to use target_ids when they are available.
 
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc). PREFERRED for buttons and shortcuts.
 - hold_key / release_key key — modifier hold/release (shift, ctrl, alt). Always pair them.
 - type text — type a string character by character.
-- click / right_click / middle_click / double_click x y — use when no keyboard shortcut exists.
-- drag x1 y1 x2 y2 — click-hold, move, release. For draggable items, sliders, camera pan.
-- scroll x y amount — mouse wheel (positive=up, negative=down). For zoom, lists.
-- hover x y — move cursor without clicking. For tooltips, inspection.
+- click / right_click / middle_click / double_click — requires "target_id".
+- drag — requires "source_id" and "target_id".
+- scroll amount — requires "target_id", amount (mouse wheel positive=up, negative=down).
+- hover — requires "target_id".
 - wait seconds — pause (decimal ok, e.g. 0.5). ONLY when the game needs time for animations.
 
 KEYBOARD SHORTCUTS — USE THEM:
@@ -48,12 +51,10 @@ KEYBOARD SHORTCUTS — USE THEM:
 - If you know a game's shortcuts from your training data, use them.
 - If a shortcut doesn't work, the system will retry — fall back to clicking only after keyboard fails.
 
-COORDINATE PRECISION:
-- The screenshot has yellow rulers on all four edges with tick marks every 50px and labels every 100px.
-- Use these rulers to measure the EXACT center of the element you want to interact with.
-- For drag commands: x1,y1 must be the EXACT CENTER of the source element, x2,y2 must be on the drop target.
-- Common mistake: estimating coordinates without checking against the rulers. Always cross-reference.
-- UI elements may shift position after interactions — always re-measure using the rulers.
+PRECISION:
+- The screenshot has numbered yellow bounding boxes over interactive elements.
+- Use the ID number displayed on the bounding box to specify your target.
+- UI elements may shift position after interactions.
 
 RULES:
 - Return ONLY valid JSON.
@@ -101,41 +102,39 @@ ROLE_PROMPTS = {
 DEFAULT_ROLE = "gamer"
 
 REVALIDATE_PROMPT = """
-You are a coordinate correction assistant for a game automation agent.
+You are a correction assistant for a game automation agent.
 
 The game state changed after executing some actions. Analyze the CURRENT
 screenshot and provide updated action commands for the remaining planned actions.
-The screenshot has YELLOW COORDINATE RULERS on all four edges — use them for precise measurement.
+The screenshot has NUMBERED BOUNDING BOXES — use them to target interactive elements.
 
 IF THE SCREEN SHOWS THE NORMAL GAME STATE:
-- Update coordinates for the remaining actions to match where elements are NOW
-- UI elements shift after interactions (e.g. items reflow, units move) — re-measure positions using the rulers
+- Update the remaining actions to use the NEW target_ids, as element IDs may have changed.
 - Targets may have been destroyed, removed, or changed position
 - Remove actions targeting things that no longer exist
 
 IF THE SCREEN SHOWS A PROMPT, DIALOG, OR SELECTION SCREEN:
 - First return action(s) to handle the prompt (e.g. click to confirm, select an option)
-- Then return the remaining planned actions with updated coordinates
+- Then return the remaining planned actions with updated target_ids
 
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — PREFERRED for buttons and shortcuts
-- click / right_click / middle_click / double_click x y
-- drag x1 y1 x2 y2 — use rulers to find EXACT CENTER of source element
-- scroll x y amount
-- hover x y
+- click / right_click / middle_click / double_click — requires "target_id".
+- drag — requires "source_id" and "target_id".
+- scroll amount — requires "target_id", amount.
+- hover — requires "target_id".
 - hold_key / release_key key
 - type text
 - wait seconds
 
 RULES:
-- Use the yellow rulers to measure coordinates precisely — do NOT estimate
 - Return ONLY valid JSON, no markdown, no extra text
 - Keep action reasons/descriptions where applicable
 
 FORMAT:
 {
   "actions": [
-    {"command": "click 750 400", "reason": "Select the target unit"},
+    {"command": "click", "target_id": 4, "reason": "Select the target unit"},
     {"command": "press enter", "reason": "Confirm action using keyboard"}
   ]
 }
@@ -150,17 +149,17 @@ The agent tried to execute this action multiple times but the screen never chang
   Attempts: {attempts}
 
 The attached screenshot shows the CURRENT game state.
-It has YELLOW COORDINATE RULERS on all four edges — use them to measure positions precisely.
+It has NUMBERED BOUNDING BOXES — use them to target interactive elements.
 
 Analyze the screenshot and decide:
 1. If a KEYBOARD SHORTCUT could achieve the same goal → use "press key" instead (strongly preferred)
-2. If the action's INTENT is still valid but coordinates are wrong → use the rulers to provide corrected coordinates
+2. If the action's INTENT is still valid but the target_id was wrong → provide the corrected action with the new target_id
 3. If a different action would achieve the same goal → provide that instead
 4. If the action is impossible (e.g. not enough resources, target doesn't exist) → respond with "skip"
 
 Common issues:
-- Coordinates were estimated wrong — use the yellow rulers to measure precisely
-- A keyboard shortcut exists that avoids coordinate issues entirely
+- The target_id was wrong or the ID of the element changed.
+- A keyboard shortcut exists that avoids ID issues entirely
 - UI elements shifted position after a previous interaction
 - A dialog/popup appeared that needs to be dismissed first
 - The action is simply not possible in the current game state
@@ -170,10 +169,11 @@ FORMAT (JSON only, no markdown, no backticks):
   "command": "press enter",
   "reason": "Using keyboard shortcut instead of clicking the button"
 }}
-OR with corrected coordinates:
+OR with a corrected ID:
 {{
-  "command": "click 580 870",
-  "reason": "Corrected: the button center is at x=580 based on the ruler markings"
+  "command": "click",
+  "target_id": 5,
+  "reason": "Corrected: the target is actually ID 5"
 }}
 OR to skip:
 {{
@@ -433,6 +433,11 @@ class LLMIntegration:
             result = self._call(prompt, image_base64, model_name)
             command = result.get("command", "").strip()
             reason = result.get("reason", "").strip()
+
+            # If target_id or source_id is returned, rebuild the command dict so the caller can parse it
+            if "target_id" in result or "source_id" in result:
+                return (result, reason)
+
             if not command:
                 print(f"[retry-assist] LLM returned no command: {result}")
                 return None

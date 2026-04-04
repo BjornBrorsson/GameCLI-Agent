@@ -4,7 +4,10 @@ from datetime import datetime
 import time
 import ctypes
 
-import pygetwindow as gw
+try:
+    import pygetwindow as gw
+except NotImplementedError:
+    pass
 
 from screen_capture import ScreenCapture
 from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
@@ -101,10 +104,55 @@ class AgentLoop:
         return True, "Agent stopped."
 
     @staticmethod
-    def _parse_action(action):
-        """Normalize action to (command_str, reason_str) regardless of format."""
+    def _parse_action(action, id_map=None):
+        """Normalize action to (command_str, reason_str) regardless of format.
+        Converts id-based targets into coordinate strings if id_map is provided.
+        """
+        if id_map is None:
+            id_map = {}
+
         if isinstance(action, dict):
-            return action.get("command", ""), action.get("reason", "")
+            cmd = action.get("command", "").strip()
+            reason = action.get("reason", "")
+
+            # Map target_id and source_id to coordinates if present
+            if "target_id" in action or "source_id" in action:
+                parts = [cmd]
+
+                # For drag: needs source and target
+                if cmd == "drag":
+                    src_id = action.get("source_id")
+                    tgt_id = action.get("target_id")
+
+                    if src_id in id_map and tgt_id in id_map:
+                        sx, sy = id_map[src_id]
+                        tx, ty = id_map[tgt_id]
+                        parts.extend([str(sx), str(sy), str(tx), str(ty)])
+                    else:
+                        # Fallback if IDs are missing from map
+                        pass
+
+                # For scroll: needs target_id and amount
+                elif cmd == "scroll":
+                    tgt_id = action.get("target_id")
+                    if tgt_id in id_map:
+                        tx, ty = id_map[tgt_id]
+                        parts.extend([str(tx), str(ty)])
+                    if "amount" in action:
+                        parts.append(str(action.get("amount")))
+
+                # For click/hover
+                else:
+                    tgt_id = action.get("target_id")
+                    if tgt_id in id_map:
+                        tx, ty = id_map[tgt_id]
+                        parts.extend([str(tx), str(ty)])
+
+                if len(parts) > 1:
+                    cmd = " ".join(parts)
+
+            return cmd, reason
+
         # Fallback for plain string actions
         return str(action), ""
 
@@ -170,14 +218,14 @@ class AgentLoop:
                 offset_y = capture_result["offset_y"]
                 scale = capture_result["scale"]
                 
-                # Draw coordinate rulers on the LLM copy (not the template-matching reference)
-                ruler_img = self.screen_capture.draw_rulers(reference_pil)
-                img_b64_with_rulers = self.screen_capture.pil_to_base64(ruler_img)
+                # Draw set of marks (bounding boxes and IDs) on the LLM copy
+                marked_img, id_map = self.screen_capture.draw_set_of_marks(reference_pil)
+                img_b64_marked = self.screen_capture.pil_to_base64(marked_img)
 
                 await _console_log(f"Step {step} - Analyzing with {model_name}... offset=({offset_x},{offset_y}) scale={scale:.2f}")
                 await emit_log(f"THINKING: Step {step} — analyzing screen...")
                 # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
-                response = await asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role)
+                response = await asyncio.to_thread(llm.get_next_action, img_b64_marked, game_instructions, model_name, role)
                 
                 narration = response.get("narration", "No narration provided.")
                 raw_actions = response.get("actions", [])
@@ -193,8 +241,8 @@ class AgentLoop:
                     continue
                 consecutive_errors = 0
                 
-                # Parse actions into (command, reason) tuples
-                parsed_actions = [self._parse_action(a) for a in raw_actions]
+                # Parse actions into (command, reason) tuples, resolving IDs to coordinates
+                parsed_actions = [self._parse_action(a, id_map) for a in raw_actions]
                 
                 # Send narration to user-facing telemetry
                 await emit_log(f"NARRATION: {narration}")
@@ -354,12 +402,19 @@ class AgentLoop:
                                     await emit_log(f"Asking LLM for help — action {action_index+1} failed {attempt+1} times")
                                     assist_pil = await asyncio.to_thread(
                                         self.screen_capture.capture_fresh, target_type, target_name)
-                                    assist_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(assist_pil))
+                                    assist_marked_img, assist_id_map = ScreenCapture.draw_set_of_marks(assist_pil)
+                                    assist_b64 = ScreenCapture.pil_to_base64(assist_marked_img)
                                     assist_result = await asyncio.to_thread(
                                         llm.retry_assist, assist_b64, cmd, reason,
                                         attempt + 1, game_instructions, model_name)
                                     if assist_result:
-                                        new_cmd, new_reason = assist_result
+                                        new_cmd_raw, new_reason = assist_result
+                                        # If new_cmd_raw is a dict (because it contains target_id), parse it using assist_id_map
+                                        if isinstance(new_cmd_raw, dict):
+                                            new_cmd, _ = self._parse_action(new_cmd_raw, assist_id_map)
+                                        else:
+                                            new_cmd = new_cmd_raw
+
                                         exec_log.log_retry_assist(attempt + 1, cmd, new_cmd, new_reason)
                                         if new_cmd.lower() == "skip":
                                             await _console_log(f"  [retry-assist] LLM says SKIP: {new_reason}")
@@ -430,13 +485,14 @@ class AgentLoop:
                             await emit_log(f"REVALIDATING: Updating remaining action coordinates...")
 
                             remaining = parsed_actions[action_index + 1:]
-                            img_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(after_pil))
+                            reval_marked_img, reval_id_map = ScreenCapture.draw_set_of_marks(after_pil)
+                            img_b64 = ScreenCapture.pil_to_base64(reval_marked_img)
                             raw_updated = await asyncio.to_thread(
                                 llm.revalidate_actions, img_b64, remaining,
                                 game_instructions, model_name)
 
                             if raw_updated:
-                                updated = [self._parse_action(a) for a in raw_updated]
+                                updated = [self._parse_action(a, reval_id_map) for a in raw_updated]
                                 parsed_actions = parsed_actions[:action_index + 1] + updated
                                 reference_pil = after_pil
 
