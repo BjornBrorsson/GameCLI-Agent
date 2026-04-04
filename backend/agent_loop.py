@@ -9,7 +9,7 @@ import pygetwindow as gw
 from screen_capture import ScreenCapture
 from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
 from action_verifier import ActionVerifier
-from llm import LLMIntegration
+from llm import LLMIntegration, BudgetExceededException
 from logger import SessionLogger, ExecutionLogger
 
 # Struggle thresholds — pause agent if actions are taking too many retries
@@ -82,13 +82,13 @@ class AgentLoop:
             print(f"  [!] _focus_window error: {e}")
         
     def start(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
-               provider: str = "gemini_cli", role: str = "gamer"):
+               provider: str = "gemini_cli", role: str = "gamer", max_budget_usd: float = 0.0):
         if self.is_running:
             return False, "Agent is already running."
             
         self.is_running = True
         self.llm = None  # will be set in _loop; exposed for cost tracking
-        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role))
+        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role, max_budget_usd))
         return True, "Agent started."
         
     def stop(self):
@@ -96,6 +96,8 @@ class AgentLoop:
             return False, "Agent is not running."
             
         self.is_running = False
+        if self.is_paused and self._resume_event:
+            self._resume_event.set()
         if self.task:
             self.task.cancel()
         return True, "Agent stopped."
@@ -133,7 +135,7 @@ class AgentLoop:
         return False
 
     async def _loop(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
-                     provider: str = "gemini_cli", role: str = "gamer"):
+                     provider: str = "gemini_cli", role: str = "gamer", max_budget_usd: float = 0.0):
         # emit_log sends to WebSocket (user-facing)
         # _console_log sends to backend console only
         async def _console_log(msg):
@@ -143,7 +145,7 @@ class AgentLoop:
         await _console_log("Agent initialized. Starting session logger...")
         
         try:
-            llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None)
+            llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None, max_budget_usd=max_budget_usd)
             self.llm = llm  # expose for cost tracking
         except Exception as e:
             await emit_log(f"ERROR: Failed to initialize LLM Integration: {e}")
@@ -158,6 +160,37 @@ class AgentLoop:
         step = 1
         consecutive_errors = 0
         
+        async def _handle_budget_call(coro):
+            """Helper to run an LLM call and cleanly handle budget exceptions."""
+            try:
+                return await coro, True
+            except BudgetExceededException as e:
+                # Capture successful result if available
+                result = getattr(e, 'partial_result', None)
+                msg_prefix = "after successful API call" if result else "before API call"
+
+                await _console_log(f"  [!] Budget exceeded {msg_prefix}: {e} — pausing agent")
+                await emit_log("PAUSED: Budget exceeded. Please authorize an increase in the budget to continue.")
+
+                self.is_paused = True
+                self._resume_event = asyncio.Event()
+                await self._resume_event.wait()
+                self._resume_event = None
+                self.is_paused = False
+
+                if not self.is_running:
+                    exec_log.log_abort()
+                    await _console_log("Agent aborted by user.")
+                    return None, False
+
+                # Assume resumed means authorized: double the budget (or add $1 minimum)
+                llm.cost.max_budget_usd = max(1.0, llm.cost.max_budget_usd * 2)
+                exec_log.log_resume()
+                await _console_log(f"Agent resumed by user. New budget: ${llm.cost.max_budget_usd:.2f}")
+                await emit_log(f"STATUS: Agent resumed — budget increased to ${llm.cost.max_budget_usd:.2f}, continuing...")
+
+                return result, True
+
         while self.is_running:
             try:
                 exec_log.log_step_header(step, model_name, target_name)
@@ -177,7 +210,14 @@ class AgentLoop:
                 await _console_log(f"Step {step} - Analyzing with {model_name}... offset=({offset_x},{offset_y}) scale={scale:.2f}")
                 await emit_log(f"THINKING: Step {step} — analyzing screen...")
                 # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
-                response = await asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role)
+
+                response, should_continue = await _handle_budget_call(
+                    asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role)
+                )
+                if not should_continue:
+                    break
+                if response is None:
+                    continue  # Retry step
                 
                 narration = response.get("narration", "No narration provided.")
                 raw_actions = response.get("actions", [])
@@ -355,9 +395,15 @@ class AgentLoop:
                                     assist_pil = await asyncio.to_thread(
                                         self.screen_capture.capture_fresh, target_type, target_name)
                                     assist_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(assist_pil))
-                                    assist_result = await asyncio.to_thread(
-                                        llm.retry_assist, assist_b64, cmd, reason,
-                                        attempt + 1, game_instructions, model_name)
+                                    assist_result, should_continue = await _handle_budget_call(
+                                        asyncio.to_thread(llm.retry_assist, assist_b64, cmd, reason,
+                                                          attempt + 1, game_instructions, model_name)
+                                    )
+                                    if not should_continue:
+                                        break
+                                    if assist_result is None:
+                                        continue  # Retry this attempt iteration
+
                                     if assist_result:
                                         new_cmd, new_reason = assist_result
                                         exec_log.log_retry_assist(attempt + 1, cmd, new_cmd, new_reason)
@@ -431,9 +477,14 @@ class AgentLoop:
 
                             remaining = parsed_actions[action_index + 1:]
                             img_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(after_pil))
-                            raw_updated = await asyncio.to_thread(
-                                llm.revalidate_actions, img_b64, remaining,
-                                game_instructions, model_name)
+                            raw_updated, should_continue = await _handle_budget_call(
+                                asyncio.to_thread(llm.revalidate_actions, img_b64, remaining,
+                                                  game_instructions, model_name)
+                            )
+                            if not should_continue:
+                                break
+                            if raw_updated is None:
+                                continue  # Retry verification/revalidation
 
                             if raw_updated:
                                 updated = [self._parse_action(a) for a in raw_updated]

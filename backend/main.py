@@ -41,6 +41,7 @@ class StartRequest(BaseModel):
     instructions: str
     provider: str = "gemini_cli"
     role: str = "gamer"
+    max_budget_usd: float = 0.0
 
 class InstructionUpdate(BaseModel):
     instructions: str
@@ -113,7 +114,8 @@ async def start_agent(req: StartRequest):
         game_instructions=req.instructions,
         emit_log=broadcast_log,
         provider=req.provider,
-        role=req.role
+        role=req.role,
+        max_budget_usd=req.max_budget_usd
     )
     return {"status": "success" if success else "error", "message": msg}
 

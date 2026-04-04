@@ -199,22 +199,36 @@ MODEL_PRICING = {
 DEFAULT_PRICING = (1.00, 3.00)  # conservative fallback
 
 
+class BudgetExceededException(Exception):
+    """Raised when the session budget limit is reached."""
+    pass
+
+
 class CostTracker:
     """Tracks token usage and estimated cost for API-based providers."""
 
-    def __init__(self):
+    def __init__(self, max_budget_usd: float = 0.0):
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
         self.call_count = 0
+        self.max_budget_usd = max_budget_usd
 
     def record(self, input_tokens: int, output_tokens: int, model_name: str):
+        # Prevent API calls if we are already at or over budget
+        if self.max_budget_usd > 0.0 and self.total_cost_usd >= self.max_budget_usd:
+            raise BudgetExceededException(f"Budget exceeded: {self.total_cost_usd:.4f} >= {self.max_budget_usd:.4f}")
+
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
         self.call_count += 1
         pricing = MODEL_PRICING.get(model_name, DEFAULT_PRICING)
         cost = (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
         self.total_cost_usd += cost
+
+        # After updating, check if we crossed the limit
+        if self.max_budget_usd > 0.0 and self.total_cost_usd > self.max_budget_usd:
+            raise BudgetExceededException(f"Budget exceeded: {self.total_cost_usd:.4f} > {self.max_budget_usd:.4f}")
 
     def get_summary(self) -> dict:
         return {
@@ -231,10 +245,10 @@ class LLMIntegration:
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     }
 
-    def __init__(self, provider: str = "gemini_cli", api_key: str = None):
+    def __init__(self, provider: str = "gemini_cli", api_key: str = None, max_budget_usd: float = 0.0):
         self.provider = provider
         self.api_key = api_key
-        self.cost = CostTracker()
+        self.cost = CostTracker(max_budget_usd)
         if provider != "gemini_cli" and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
@@ -309,6 +323,10 @@ class LLMIntegration:
         """Call an OpenAI-compatible chat completions API.
         Works for both Gemini API and OpenRouter.
         """
+        # Pre-check budget before incurring costs
+        if self.cost.max_budget_usd > 0.0 and self.cost.total_cost_usd >= self.cost.max_budget_usd:
+            raise BudgetExceededException(f"Budget exceeded: {self.cost.total_cost_usd:.4f} >= {self.cost.max_budget_usd:.4f}")
+
         endpoint = self.PROVIDER_ENDPOINTS[self.provider]
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -370,20 +388,15 @@ class LLMIntegration:
         if data is None:
             raise last_err or RuntimeError("API call failed with no response")
 
+        # Extract content
+        content = data["choices"][0]["message"]["content"]
+
         # Track tokens / cost
         usage = data.get("usage", {})
         in_tok = usage.get("prompt_tokens", 0)
         out_tok = usage.get("completion_tokens", 0)
-        self.cost.record(in_tok, out_tok, model_name)
-        cost_so_far = self.cost.total_cost_usd
-        print(f"  [api] {self.provider} {model_name}  "
-              f"{in_tok}+{out_tok} tok  {elapsed:.1f}s  "
-              f"session=${cost_so_far:.4f}")
 
-        # Extract content
-        content = data["choices"][0]["message"]["content"]
-
-        # Parse JSON from content
+        # Parse JSON from content first so we don't lose the result if budget is exceeded
         clean_content = re.sub(r'```(?:json)?', '', content).strip()
         start_idx = clean_content.find('{')
         end_idx = clean_content.rfind('}')
@@ -391,7 +404,25 @@ class LLMIntegration:
             raise ValueError(f"No JSON in API response: {content[:300]}")
 
         json_str = clean_content[start_idx:end_idx + 1]
-        return json.loads(json_str)
+        result_json = json.loads(json_str)
+
+        try:
+            self.cost.record(in_tok, out_tok, model_name)
+        except BudgetExceededException as e:
+            # Attach the successful result to the exception so the caller can still use it
+            e.partial_result = result_json
+            cost_so_far = self.cost.total_cost_usd
+            print(f"  [api] {self.provider} {model_name}  "
+                  f"{in_tok}+{out_tok} tok  {elapsed:.1f}s  "
+                  f"session=${cost_so_far:.4f}")
+            raise
+
+        cost_so_far = self.cost.total_cost_usd
+        print(f"  [api] {self.provider} {model_name}  "
+              f"{in_tok}+{out_tok} tok  {elapsed:.1f}s  "
+              f"session=${cost_so_far:.4f}")
+
+        return result_json
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
         try:
@@ -403,6 +434,8 @@ class LLMIntegration:
                 f"Please analyze the attached screenshot image and respond with the JSON."
             )
             return self._call(prompt, image_base64, model_name)
+        except BudgetExceededException:
+            raise
         except subprocess.CalledProcessError as e:
             print(f"Gemini CLI error: {e.stderr}")
             return {"narration": f"CLI Error occurred: {e.stderr}", "actions": []}
@@ -437,6 +470,15 @@ class LLMIntegration:
                 print(f"[retry-assist] LLM returned no command: {result}")
                 return None
             return (command, reason)
+        except BudgetExceededException as e:
+            if hasattr(e, 'partial_result') and isinstance(e.partial_result, dict):
+                command = e.partial_result.get("command", "").strip()
+                reason = e.partial_result.get("reason", "").strip()
+                if command:
+                    e.partial_result = (command, reason)
+                else:
+                    e.partial_result = None
+            raise
         except Exception as e:
             print(f"[retry-assist] Error: {e}")
             return None
@@ -460,6 +502,10 @@ class LLMIntegration:
         try:
             result = self._call(prompt, image_base64, model_name)
             return result.get("actions", [])
+        except BudgetExceededException as e:
+            if hasattr(e, 'partial_result') and isinstance(e.partial_result, dict):
+                e.partial_result = e.partial_result.get("actions", [])
+            raise
         except Exception as e:
             print(f"[revalidate] Error: {e}")
             return None
