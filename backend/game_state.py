@@ -219,6 +219,7 @@ class GameMemory:
         self.session = SessionMemory()
         self._last_phase = GamePhase.UNKNOWN
         self._in_encounter = False
+        self.is_consolidating = False
     
     def update_phase(self, new_phase: str):
         """Called each step with the detected phase. Manages memory transitions."""
@@ -293,6 +294,13 @@ class GameMemory:
     def update_strategy(self, strategy: str):
         """Update the session-level strategic direction."""
         self.session.strategy = strategy
+
+    def replace_observations(self, consolidated_observations: List[str], scope: str = "session"):
+        """Replace observations in a given scope with a consolidated list."""
+        if scope == "session":
+            self.session.observations = consolidated_observations
+        elif scope == "encounter":
+            self.encounter.observations = consolidated_observations
     
     def format_for_prompt(self, phase: str, ocr_text: str = "") -> str:
         """Format all relevant memory tiers into a text block for the LLM prompt."""

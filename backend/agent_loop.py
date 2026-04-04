@@ -11,6 +11,7 @@ from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOW
 from action_verifier import ActionVerifier
 from llm import LLMIntegration
 from logger import SessionLogger, ExecutionLogger
+from game_state import GameMemory, GamePhase
 
 # Struggle thresholds — pause agent if actions are taking too many retries
 # Average attempts > this means the agent is struggling (1.0 = every action first-try)
@@ -29,6 +30,7 @@ class AgentLoop:
         self.screen_capture = ScreenCapture()
         self.input_controller = InputController()
         self.verifier = ActionVerifier()
+        self.memory = GameMemory()
 
     def resume(self):
         """Resume the agent after a pause."""
@@ -132,6 +134,36 @@ class AgentLoop:
                 prev_hash = cur_hash
         return False
 
+    async def _auto_dream_task(self):
+        """Background task to consolidate observations and prevent context bloat."""
+        if not self.llm or self.memory.is_consolidating:
+            return
+
+        self.memory.is_consolidating = True
+        try:
+            # We consolidate both encounter and session memory if they get too large
+            if len(self.memory.encounter.observations) > 5:
+                print("  [autodream] Consolidating encounter memory...")
+                consolidated = await asyncio.to_thread(
+                    self.llm.consolidate_memory,
+                    self.memory.encounter.observations
+                )
+                if consolidated:
+                    self.memory.replace_observations(consolidated, scope="encounter")
+
+            if len(self.memory.session.observations) > 5:
+                print("  [autodream] Consolidating session memory...")
+                consolidated = await asyncio.to_thread(
+                    self.llm.consolidate_memory,
+                    self.memory.session.observations
+                )
+                if consolidated:
+                    self.memory.replace_observations(consolidated, scope="session")
+        except Exception as e:
+            print(f"  [autodream] Error during consolidation: {e}")
+        finally:
+            self.memory.is_consolidating = False
+
     async def _loop(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
                      provider: str = "gemini_cli", role: str = "gamer"):
         # emit_log sends to WebSocket (user-facing)
@@ -196,6 +228,10 @@ class AgentLoop:
                 # Parse actions into (command, reason) tuples
                 parsed_actions = [self._parse_action(a) for a in raw_actions]
                 
+                # Record narration into session observations so it can be consolidated
+                if narration and "error" not in narration.lower():
+                    self.memory.record_observation(narration, scope="session")
+
                 # Send narration to user-facing telemetry
                 await emit_log(f"NARRATION: {narration}")
                 for cmd, reason in parsed_actions:
@@ -244,6 +280,14 @@ class AgentLoop:
 
                     # `wait` commands always succeed — no screen change expected
                     if is_wait:
+                        # Trigger background auto-dream consolidation during forced waits
+                        if not self.memory.is_consolidating and (
+                            len(self.memory.encounter.observations) > 5 or
+                            len(self.memory.session.observations) > 5
+                        ):
+                            await _console_log("  [autodream] Starting background memory consolidation during wait state...")
+                            asyncio.create_task(self._auto_dream_task())
+
                         exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale)
                         self.input_controller.execute_action(cmd, offset_x, offset_y, scale)
                         exec_log.log_result(0, True, True)
