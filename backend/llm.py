@@ -32,14 +32,7 @@ FORMAT:
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
 
 COMMANDS (prefer keyboard over mouse when possible):
-- press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc). PREFERRED for buttons and shortcuts.
-- hold_key / release_key key — modifier hold/release (shift, ctrl, alt). Always pair them.
-- type text — type a string character by character.
-- click / right_click / middle_click / double_click x y — use when no keyboard shortcut exists.
-- drag x1 y1 x2 y2 — click-hold, move, release. For draggable items, sliders, camera pan.
-- scroll x y amount — mouse wheel (positive=up, negative=down). For zoom, lists.
-- hover x y — move cursor without clicking. For tooltips, inspection.
-- wait seconds — pause (decimal ok, e.g. 0.5). ONLY when the game needs time for animations.
+{commands_list}
 
 KEYBOARD SHORTCUTS — USE THEM:
 - ALWAYS prefer keyboard shortcuts over clicking when they exist.
@@ -118,14 +111,7 @@ IF THE SCREEN SHOWS A PROMPT, DIALOG, OR SELECTION SCREEN:
 - Then return the remaining planned actions with updated coordinates
 
 COMMANDS (prefer keyboard over mouse when possible):
-- press key — PREFERRED for buttons and shortcuts
-- click / right_click / middle_click / double_click x y
-- drag x1 y1 x2 y2 — use rulers to find EXACT CENTER of source element
-- scroll x y amount
-- hover x y
-- hold_key / release_key key
-- type text
-- wait seconds
+{commands_list_short}
 
 RULES:
 - Use the yellow rulers to measure coordinates precisely — do NOT estimate
@@ -393,10 +379,21 @@ class LLMIntegration:
         json_str = clean_content[start_idx:end_idx + 1]
         return json.loads(json_str)
 
-    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
+    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer", enabled_tools: list[str] = None):
         try:
+            long_cmds = []
+            tools_path = os.path.join(os.path.dirname(__file__), 'tools.json')
+            if os.path.exists(tools_path):
+                with open(tools_path, 'r', encoding='utf-8') as f:
+                    tools = json.load(f)
+                for name, tool in tools.items():
+                    if enabled_tools is None or name in enabled_tools:
+                        long_cmds.append(tool.get('description', ''))
+
+            commands_str = "\n".join(long_cmds)
+
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
-            system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
+            system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions).replace("{commands_list}", commands_str)
             prompt = (
                 f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n"
                 f"Game Instructions:\n{game_instructions}\n\n"
@@ -442,7 +439,7 @@ class LLMIntegration:
             return None
 
     def revalidate_actions(self, image_base64: str, remaining_actions: list,
-                           game_instructions: str, model_name: str):
+                           game_instructions: str, model_name: str, enabled_tools: list[str] = None):
         """Lightweight LLM call to update coordinates for remaining actions.
         Also handles unexpected prompts/dialogs if the LLM detects one.
         Returns list of action dicts [{"command": ..., "reason": ...}] or None.
@@ -451,8 +448,21 @@ class LLMIntegration:
             f"  {i+1}. {cmd}" + (f" — {reason}" if reason else "")
             for i, (cmd, reason) in enumerate(remaining_actions)
         )
+
+        short_cmds = []
+        tools_path = os.path.join(os.path.dirname(__file__), 'tools.json')
+        if os.path.exists(tools_path):
+            with open(tools_path, 'r', encoding='utf-8') as f:
+                tools = json.load(f)
+            for name, tool in tools.items():
+                if enabled_tools is None or name in enabled_tools:
+                    short_cmds.append(tool.get('short_description', tool.get('description', '')))
+
+        commands_str_short = "\n".join(short_cmds)
+        filled_prompt = REVALIDATE_PROMPT.replace("{commands_list_short}", commands_str_short)
+
         prompt = (
-            f"SYSTEM INSTRUCTIONS:\n{REVALIDATE_PROMPT}\n\n"
+            f"SYSTEM INSTRUCTIONS:\n{filled_prompt}\n\n"
             f"Game context:\n{game_instructions}\n\n"
             f"REMAINING PLANNED ACTIONS:\n{actions_text}\n\n"
             f"Analyze the current screenshot and provide updated action coordinates."

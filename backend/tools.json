@@ -1,0 +1,34 @@
+{
+  "press": {
+    "description": "- press key \u2014 single key tap (enter, escape, space, tab, e, 1, 2, f5, etc). PREFERRED for buttons and shortcuts.",
+    "short_description": "- press key \u2014 PREFERRED for buttons and shortcuts"
+  },
+  "hold_key": {
+    "description": "- hold_key / release_key key \u2014 modifier hold/release (shift, ctrl, alt). Always pair them.",
+    "short_description": "- hold_key / release_key key"
+  },
+  "type": {
+    "description": "- type text \u2014 type a string character by character.",
+    "short_description": "- type text"
+  },
+  "click": {
+    "description": "- click / right_click / middle_click / double_click x y \u2014 use when no keyboard shortcut exists.",
+    "short_description": "- click / right_click / middle_click / double_click x y"
+  },
+  "drag": {
+    "description": "- drag x1 y1 x2 y2 \u2014 click-hold, move, release. For draggable items, sliders, camera pan.",
+    "short_description": "- drag x1 y1 x2 y2 \u2014 use rulers to find EXACT CENTER of source element"
+  },
+  "scroll": {
+    "description": "- scroll x y amount \u2014 mouse wheel (positive=up, negative=down). For zoom, lists.",
+    "short_description": "- scroll x y amount"
+  },
+  "hover": {
+    "description": "- hover x y \u2014 move cursor without clicking. For tooltips, inspection.",
+    "short_description": "- hover x y"
+  },
+  "wait": {
+    "description": "- wait seconds \u2014 pause (decimal ok, e.g. 0.5). ONLY when the game needs time for animations.",
+    "short_description": "- wait seconds"
+  }
+}
