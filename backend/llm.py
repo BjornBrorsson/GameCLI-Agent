@@ -22,7 +22,7 @@ FORMAT:
 {
   "narration": "Brief calm analysis: what you see, your options, why you chose these actions. Internal monologue only. No greetings, hype, sign-offs, or exclamation marks.",
   "actions": [
-    {"command": "press enter", "reason": "Confirm selection using keyboard"},
+    {"command": "press enter", "reason": "Confirm selection using keyboard", "precondition": "Phase == Combat", "wait_after_condition": "enemy_turn_animation_ends"},
     {"command": "click 1450 780", "reason": "Click the End Turn button"}
   ]
 }
@@ -30,6 +30,7 @@ FORMAT:
 {role_instructions}
 
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
+You can optionally include "precondition" to assert a game state (e.g. "Phase == Combat") before the action executes, and "wait_after_condition" to instruct the agent to pause until a visual animation resolves.
 
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc). PREFERRED for buttons and shortcuts.
@@ -135,7 +136,7 @@ RULES:
 FORMAT:
 {
   "actions": [
-    {"command": "click 750 400", "reason": "Select the target unit"},
+    {"command": "click 750 400", "reason": "Select the target unit", "precondition": "Phase == Combat", "wait_after_condition": "unit_selection_animation"},
     {"command": "press enter", "reason": "Confirm action using keyboard"}
   ]
 }

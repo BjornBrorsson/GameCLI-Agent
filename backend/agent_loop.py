@@ -9,6 +9,7 @@ import pygetwindow as gw
 from screen_capture import ScreenCapture
 from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
 from action_verifier import ActionVerifier
+from game_state import detect_phase
 from llm import LLMIntegration
 from logger import SessionLogger, ExecutionLogger
 
@@ -102,11 +103,11 @@ class AgentLoop:
 
     @staticmethod
     def _parse_action(action):
-        """Normalize action to (command_str, reason_str) regardless of format."""
+        """Normalize action to (command_str, reason_str, precondition, wait_after_condition) regardless of format."""
         if isinstance(action, dict):
-            return action.get("command", ""), action.get("reason", "")
+            return action.get("command", ""), action.get("reason", ""), action.get("precondition", ""), action.get("wait_after_condition", "")
         # Fallback for plain string actions
-        return str(action), ""
+        return str(action), "", "", ""
 
     async def _wait_for_stable(self, target_type: str, target_name: str,
                                timeout: float = 4.0, interval: float = 0.5) -> bool:
@@ -224,14 +225,37 @@ class AgentLoop:
                 # Using a while-loop so we can splice in revalidated actions mid-flight
                 from action_verifier import MIN_CONFIDENCE as VISION_CONF_THRESHOLD
                 action_index = 0
+
+                # Cache the detected phase for the step to avoid re-running OCR repeatedly
+                current_phase, _ = await asyncio.to_thread(detect_phase, pre_step_pil)
+
                 while action_index < len(parsed_actions) and self.is_running:
-                    cmd, reason = parsed_actions[action_index]
+                    cmd, reason, precond, wait_after = parsed_actions[action_index]
 
                     action_label = f"[{action_index+1}/{len(parsed_actions)}] {cmd}"
                     if reason:
                         action_label += f" ({reason})"
                     await _console_log(f"EXEC: {action_label}")
                     exec_log.log_action_start(action_index + 1, len(parsed_actions), cmd, reason)
+
+                    if precond:
+                        # Extract requested phase from precondition (e.g., "Phase == Combat")
+                        precond_lower = precond.lower()
+                        if "==" in precond_lower:
+                            req_phase = precond_lower.split("==")[1].strip()
+                        elif "=" in precond_lower:
+                            req_phase = precond_lower.split("=")[1].strip()
+                        else:
+                            req_phase = precond_lower.strip()
+
+                        # Match with our current phase
+                        if req_phase and req_phase not in current_phase.lower():
+                            msg = f"Skipping action {action_index+1}: precondition '{precond}' failed (current phase: {current_phase})"
+                            await _console_log(f"  [!] {msg}")
+                            await emit_log(f"WARNING: {msg}")
+                            exec_log.log(f"  [skip] {msg}")
+                            action_index += 1
+                            continue
 
                     action_succeeded = False
                     final_attempt = 0
@@ -372,7 +396,7 @@ class AgentLoop:
                                             reason = new_reason or reason
                                             # Update in parsed_actions so downstream
                                             # revalidation sees the corrected action
-                                            parsed_actions[action_index] = (cmd, reason)
+                                            parsed_actions[action_index] = (cmd, reason, precond, wait_after)
                                             # Recompute max_retries for new action type
                                             action_type = cmd.split()[0].lower()
                                             is_drag = action_type == "drag"
@@ -415,12 +439,22 @@ class AgentLoop:
                     if not stable:
                         await _console_log(f"  … Screen still animating (timeout), proceeding")
 
+                    # If a wait_after_condition was requested, we do an extended wait for the visual state to stabilize.
+                    if wait_after and self.is_running:
+                        await _console_log(f"  [wait_after] Waiting for condition: '{wait_after}' to resolve...")
+                        await emit_log(f"WAITING: Waiting for {wait_after}...")
+                        waited_stable = await self._wait_for_stable(target_type, target_name, timeout=10.0, interval=0.5)
+                        if waited_stable:
+                            await _console_log(f"  [wait_after] Screen stabilized.")
+                        else:
+                            await _console_log(f"  [wait_after] Timeout waiting for screen to stabilize.")
+
                     # ── Post-action revalidation ──
                     # After a successful action that changed the screen, check if
                     # the NEXT action's coordinates still match. If not, ask the
                     # LLM for updated coordinates (also handles unexpected prompts).
                     if action_succeeded and after_pil is not None and action_index < len(parsed_actions) - 1:
-                        next_cmd, _ = parsed_actions[action_index + 1]
+                        next_cmd = parsed_actions[action_index + 1][0]
                         conf = await asyncio.to_thread(
                             self.verifier.check_action_confidence,
                             next_cmd, reference_pil, after_pil)
@@ -429,7 +463,8 @@ class AgentLoop:
                             await _console_log(f"  [revalidate] Next action confidence {conf:.2f} < {VISION_CONF_THRESHOLD} — requesting LLM update...")
                             await emit_log(f"REVALIDATING: Updating remaining action coordinates...")
 
-                            remaining = parsed_actions[action_index + 1:]
+                            # revalidate_actions expects a list of (cmd, reason) tuples
+                            remaining = [(cmd, reason) for cmd, reason, _, _ in parsed_actions[action_index + 1:]]
                             img_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(after_pil))
                             raw_updated = await asyncio.to_thread(
                                 llm.revalidate_actions, img_b64, remaining,
@@ -440,9 +475,9 @@ class AgentLoop:
                                 parsed_actions = parsed_actions[:action_index + 1] + updated
                                 reference_pil = after_pil
 
-                                exec_log.log_revalidation(conf, len(updated), updated)
+                                exec_log.log_revalidation(conf, len(updated), [(c, r) for c, r, _, _ in updated])
                                 await _console_log(f"  [revalidate] Replaced {len(remaining)} remaining action(s) with {len(updated)} updated action(s)")
-                                for j, (ucmd, ureason) in enumerate(updated):
+                                for j, (ucmd, ureason, _, _) in enumerate(updated):
                                     await _console_log(f"    [{action_index+2+j}] {ucmd}" + (f" — {ureason}" if ureason else ""))
                             else:
                                 exec_log.log(f"  [revalidate] LLM call failed — continuing with original coords")
@@ -469,7 +504,7 @@ class AgentLoop:
                 # timing or the button not being active yet.
                 SAME_STATE_RETRIES = 5
                 if not overall_changed and self.is_running and parsed_actions:
-                    last_cmd, last_reason = parsed_actions[-1]
+                    last_cmd = parsed_actions[-1][0]
                     await _console_log(f"  [same-state] Step {step} had no effect — retrying last action: {last_cmd}")
                     await emit_log(f"RETRYING: {last_cmd} (step had no visible effect)")
                     exec_log.log(f"  [same-state] overall_screen_change=no → retrying last action: {last_cmd}")
