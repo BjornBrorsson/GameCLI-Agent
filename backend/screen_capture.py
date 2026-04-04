@@ -1,6 +1,9 @@
 import mss
 import mss.tools
-import pygetwindow as gw
+try:
+    import pygetwindow as gw
+except NotImplementedError:
+    pass
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import io
@@ -178,68 +181,63 @@ class ScreenCapture:
         return diff < threshold
 
     @staticmethod
-    def draw_rulers(img: Image.Image) -> Image.Image:
-        """Draw coordinate rulers on the edges of the image.
-        Helps LLMs estimate pixel positions by providing visual anchor points.
-        Ticks every 100px with labels, minor ticks every 50px.
-        Returns a NEW image (does not mutate the original).
+    def draw_set_of_marks(img: Image.Image) -> tuple[Image.Image, dict]:
         """
-        img = img.copy()
-        draw = ImageDraw.Draw(img)
-        w, h = img.size
+        Pre-processes the screenshot to find interactive elements and draws numbered
+        bounding boxes over them (Set-of-Marks). Returns the marked image and a
+        dictionary mapping target_id to the center coordinate (x, y).
+        """
+        import cv2
+        import numpy as np
 
-        # Use a small built-in font
+        # Convert PIL to CV2 image
+        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+        # Convert to grayscale and run Canny edge detection
+        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        # Find contours
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Draw bounding boxes and collect ID mapping
+        id_map = {}
+        idx = 1
+
+        # Use PIL ImageDraw to draw the text with shadow so it's more readable
+        marked_img = img.copy()
+        draw = ImageDraw.Draw(marked_img)
+
         try:
-            font = ImageFont.truetype("arial.ttf", 12)
+            font = ImageFont.truetype("arial.ttf", 14)
         except Exception:
             font = ImageFont.load_default()
 
-        tick_color = (255, 255, 0)  # yellow — visible on dark and light backgrounds
-        label_color = (255, 255, 0)
+        box_color = (0, 255, 255) # yellow
+        text_color = (255, 255, 0)
         shadow_color = (0, 0, 0)
-        major = 100  # major tick interval
-        minor = 50   # minor tick interval
-        major_len = 12
-        minor_len = 6
 
-        # Top ruler (horizontal)
-        for x in range(0, w, minor):
-            tlen = major_len if x % major == 0 else minor_len
-            draw.line([(x, 0), (x, tlen)], fill=tick_color, width=1)
-            if x % major == 0 and x > 0:
-                txt = str(x)
-                # Shadow for readability
-                draw.text((x + 2, 1), txt, fill=shadow_color, font=font)
-                draw.text((x + 1, 0), txt, fill=label_color, font=font)
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            # Filter for reasonably sized elements (buttons, cards, etc)
+            if w > 20 and h > 20 and w < marked_img.width * 0.9 and h < marked_img.height * 0.9:
+                cx, cy = x + w // 2, y + h // 2
+                id_map[idx] = (cx, cy)
 
-        # Left ruler (vertical)
-        for y in range(0, h, minor):
-            tlen = major_len if y % major == 0 else minor_len
-            draw.line([(0, y), (tlen, y)], fill=tick_color, width=1)
-            if y % major == 0 and y > 0:
-                txt = str(y)
-                draw.text((2, y + 1), txt, fill=shadow_color, font=font)
-                draw.text((1, y), txt, fill=label_color, font=font)
+                # Draw bounding box
+                draw.rectangle([x, y, x + w, y + h], outline=box_color, width=2)
 
-        # Bottom ruler (horizontal)
-        for x in range(0, w, minor):
-            tlen = major_len if x % major == 0 else minor_len
-            draw.line([(x, h - 1), (x, h - 1 - tlen)], fill=tick_color, width=1)
-            if x % major == 0 and x > 0:
-                txt = str(x)
-                draw.text((x + 2, h - 15), txt, fill=shadow_color, font=font)
-                draw.text((x + 1, h - 16), txt, fill=label_color, font=font)
+                # Draw text with shadow
+                txt = str(idx)
+                # Determine text placement (top left of bounding box)
+                tx, ty = max(0, x - 2), max(0, y - 18)
 
-        # Right ruler (vertical)
-        for y in range(0, h, minor):
-            tlen = major_len if y % major == 0 else minor_len
-            draw.line([(w - 1, y), (w - 1 - tlen, y)], fill=tick_color, width=1)
-            if y % major == 0 and y > 0:
-                txt = str(y)
-                draw.text((w - 30, y + 1), txt, fill=shadow_color, font=font)
-                draw.text((w - 31, y), txt, fill=label_color, font=font)
+                draw.text((tx + 1, ty + 1), txt, fill=shadow_color, font=font)
+                draw.text((tx, ty), txt, fill=text_color, font=font)
 
-        return img
+                idx += 1
+
+        return marked_img, id_map
 
     @staticmethod
     def pil_to_base64(pil_img: Image.Image, quality: int = 70) -> str:
