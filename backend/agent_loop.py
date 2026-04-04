@@ -146,7 +146,7 @@ class AgentLoop:
             llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None)
             self.llm = llm  # expose for cost tracking
         except Exception as e:
-            await emit_log(f"ERROR: Failed to initialize LLM Integration: {e}")
+            await emit_log({"type": "error", "message": f"Failed to initialize LLM Integration: {e}"})
             self.is_running = False
             return
             
@@ -175,7 +175,7 @@ class AgentLoop:
                 img_b64_with_rulers = self.screen_capture.pil_to_base64(ruler_img)
 
                 await _console_log(f"Step {step} - Analyzing with {model_name}... offset=({offset_x},{offset_y}) scale={scale:.2f}")
-                await emit_log(f"THINKING: Step {step} — analyzing screen...")
+                await emit_log({"type": "thinking", "step": step, "message": f"Step {step} — analyzing screen..."})
                 # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
                 response = await asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role)
                 
@@ -186,7 +186,7 @@ class AgentLoop:
                 if not raw_actions and ("error" in narration.lower() or "Error" in narration):
                     consecutive_errors += 1
                     cooldown = min(consecutive_errors * 5, 30)  # 5s, 10s, 15s... up to 30s
-                    await emit_log(f"ERROR: LLM returned error ({consecutive_errors} in a row). Cooling down {cooldown}s...")
+                    await emit_log({"type": "error", "message": f"LLM returned error ({consecutive_errors} in a row). Cooling down {cooldown}s..."})
                     await _console_log(f"  [!] LLM error #{consecutive_errors}, cooldown {cooldown}s")
                     await asyncio.sleep(cooldown)
                     step += 1
@@ -197,10 +197,10 @@ class AgentLoop:
                 parsed_actions = [self._parse_action(a) for a in raw_actions]
                 
                 # Send narration to user-facing telemetry
-                await emit_log(f"NARRATION: {narration}")
+                await emit_log({"type": "narration", "message": narration})
                 for cmd, reason in parsed_actions:
                     label = f"{cmd}" + (f"  —  {reason}" if reason else "")
-                    await emit_log(f"ACTION: {label}")
+                    await emit_log({"type": "action", "command": cmd, "reason": reason, "message": label})
                 
                 # Log to markdown
                 logger.log_step(step, narration, parsed_actions)
@@ -287,9 +287,9 @@ class AgentLoop:
                         await _console_log(f"  [exec{attempt_label}] {exec_label}")
                         if emit_to_frontend:
                             if adjusted_cmd != cmd or attempt > 0:
-                                await emit_log(f"EXECUTING: {exec_label}" + (f"  —  {reason}{attempt_label}" if reason else attempt_label))
+                                await emit_log({"type": "executing", "command": exec_label, "reason": reason, "attempt": attempt, "max_retries": max_retries, "message": f"{exec_label}" + (f"  —  {reason}{attempt_label}" if reason else attempt_label)})
                             else:
-                                await emit_log(f"EXECUTING: {cmd}" + (f"  —  {reason}" if reason else ""))
+                                await emit_log({"type": "executing", "command": cmd, "reason": reason, "attempt": attempt, "max_retries": max_retries, "message": f"{cmd}" + (f"  —  {reason}" if reason else "")})
 
                         # Use the fresh screenshot as "before" for pixel comparison
                         before_pil = fresh_pil
@@ -351,7 +351,7 @@ class AgentLoop:
                                 # what's wrong instead of continuing blind nudges.
                                 if attempt + 1 == LLM_ASSIST_AFTER:
                                     await _console_log(f"  [retry-assist] Asking LLM for help after {attempt+1} failures...")
-                                    await emit_log(f"Asking LLM for help — action {action_index+1} failed {attempt+1} times")
+                                    await emit_log({"type": "llm_assist", "message": f"Asking LLM for help — action {action_index+1} failed {attempt+1} times"})
                                     assist_pil = await asyncio.to_thread(
                                         self.screen_capture.capture_fresh, target_type, target_name)
                                     assist_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(assist_pil))
@@ -363,11 +363,11 @@ class AgentLoop:
                                         exec_log.log_retry_assist(attempt + 1, cmd, new_cmd, new_reason)
                                         if new_cmd.lower() == "skip":
                                             await _console_log(f"  [retry-assist] LLM says SKIP: {new_reason}")
-                                            await emit_log(f"LLM: skipping action — {new_reason}")
+                                            await emit_log({"type": "llm", "message": f"skipping action — {new_reason}"})
                                             break  # exit retry loop, mark as failed
                                         else:
                                             await _console_log(f"  [retry-assist] LLM corrected: {new_cmd}")
-                                            await emit_log(f"LLM corrected action: {new_cmd}")
+                                            await emit_log({"type": "llm", "message": f"corrected action: {new_cmd}"})
                                             cmd = new_cmd
                                             reason = new_reason or reason
                                             # Update in parsed_actions so downstream
@@ -401,14 +401,14 @@ class AgentLoop:
                                 await asyncio.to_thread(self._focus_window, target_type, target_name)
                                 await _console_log(f"  ↻ Retrying with nudge + longer settle...")
                                 if (attempt + 1) % 5 == 0:
-                                    await emit_log(f"WARNING: Retrying action {action_index+1} (attempt {attempt+1}/{max_retries})")
+                                    await emit_log({"type": "action_retry", "action_index": action_index + 1, "attempt": attempt + 1, "max_retries": max_retries, "message": f"Retrying action {action_index+1} (attempt {attempt+1}/{max_retries})"})
 
                     total_actions += 1
                     if not action_succeeded:
                         failed_actions += 1
                         final_attempt = max_retries
                         await _console_log(f"  ✗✗ Action {action_index+1} FAILED after {max_retries} retries")
-                        await emit_log(f"WARNING: Action failed after {max_retries} retries — skipping")
+                        await emit_log({"type": "warning", "message": f"Action failed after {max_retries} retries — skipping"})
                     attempt_counts.append(final_attempt + 1)
                     exec_log.log_action_outcome(action_index + 1, action_succeeded, final_attempt + 1)
 
@@ -427,7 +427,7 @@ class AgentLoop:
 
                         if conf < VISION_CONF_THRESHOLD:
                             await _console_log(f"  [revalidate] Next action confidence {conf:.2f} < {VISION_CONF_THRESHOLD} — requesting LLM update...")
-                            await emit_log(f"REVALIDATING: Updating remaining action coordinates...")
+                            await emit_log({"type": "revalidating", "message": "Updating remaining action coordinates..."})
 
                             remaining = parsed_actions[action_index + 1:]
                             img_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(after_pil))
@@ -471,7 +471,7 @@ class AgentLoop:
                 if not overall_changed and self.is_running and parsed_actions:
                     last_cmd, last_reason = parsed_actions[-1]
                     await _console_log(f"  [same-state] Step {step} had no effect — retrying last action: {last_cmd}")
-                    await emit_log(f"RETRYING: {last_cmd} (step had no visible effect)")
+                    await emit_log({"type": "retrying", "message": f"{last_cmd} (step had no visible effect)"})
                     exec_log.log(f"  [same-state] overall_screen_change=no → retrying last action: {last_cmd}")
 
                     for ss_retry in range(SAME_STATE_RETRIES):
@@ -500,7 +500,7 @@ class AgentLoop:
 
                 if not overall_changed:
                     await _console_log(f"  [!] Step {step}: Screen identical before/after ALL actions — nothing worked")
-                    await emit_log(f"WARNING: No actions appeared to take effect this step")
+                    await emit_log({"type": "warning", "message": "No actions appeared to take effect this step"})
                 else:
                     await _console_log(f"  Step {step}: Screen changed — actions had effect")
                 # Compute struggle metrics from attempt counts
@@ -532,10 +532,7 @@ class AgentLoop:
 
                         exec_log.log_pause_struggle(avg_attempts, max_attempts, failed_actions)
                         await _console_log(f"  [!] Struggling: {pause_reason} — pausing agent")
-                        await emit_log(
-                            f"PAUSED: Agent is struggling ({pause_reason}). "
-                            f"Press Continue Agent or Abort to proceed."
-                        )
+                        await emit_log({"type": "paused", "message": f"Agent is struggling ({pause_reason}). Press Continue Agent or Abort to proceed."})
                         self.is_paused = True
                         self._resume_event = asyncio.Event()
                         await self._resume_event.wait()
@@ -546,7 +543,7 @@ class AgentLoop:
                             break
                         exec_log.log_resume()
                         await _console_log("Agent resumed by user.")
-                        await emit_log("STATUS: Agent resumed — continuing...")
+                        await emit_log({"type": "status", "message": "Agent resumed — continuing..."})
 
                 step += 1
                 
@@ -561,7 +558,7 @@ class AgentLoop:
                 await _console_log("Agent task cancelled.")
                 break
             except Exception as e:
-                await emit_log(f"ERROR: {e}")
+                await emit_log({"type": "error", "message": str(e)})
                 await _console_log(f"Exception in agent loop: {e}")
                 await asyncio.sleep(5)
                 

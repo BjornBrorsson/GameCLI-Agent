@@ -33,6 +33,8 @@ function App() {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sessionCost, setSessionCost] = useState(null);
+  const [visionStatus, setVisionStatus] = useState('Idle');
+  const [currentAction, setCurrentAction] = useState(null);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -187,26 +189,52 @@ function App() {
   const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
-      const msg = event.data;
-      // Strip timestamp prefix for classification
-      const stripped = msg.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
-      // Detect PAUSED state from backend
-      if (stripped.startsWith('PAUSED:')) {
-        setIsPaused(true);
-      }
-      if (stripped.startsWith('STATUS:') && stripped.includes('resumed')) {
-        setIsPaused(false);
-      }
-      // STATUS/THINKING messages go to browser console only
-      if (stripped.startsWith('STATUS:') || stripped.startsWith('THINKING:')) {
-        console.log(msg);
-        // Still add THINKING to logs as a subtle indicator
-        if (stripped.startsWith('THINKING:')) {
-          setLogs((prev) => [...prev, msg]);
+      try {
+        const msg = JSON.parse(event.data);
+        const { type } = msg;
+
+        // Detect PAUSED state from backend
+        if (type === 'paused') {
+          setIsPaused(true);
         }
-        return;
+        if (type === 'status' && msg.message && msg.message.includes('resumed')) {
+          setIsPaused(false);
+        }
+
+        // Track structured events for dedicated UI components
+        if (type === 'thinking') setVisionStatus('Analyzing screen...');
+        else if (type === 'executing') {
+          setVisionStatus(`Executing: ${msg.command}`);
+          setCurrentAction({ command: msg.command, reason: msg.reason, attempt: msg.attempt, max_retries: msg.max_retries });
+        }
+        else if (type === 'action_retry') {
+          setVisionStatus(`Retrying action ${msg.action_index} (Attempt ${msg.attempt}/${msg.max_retries})`);
+        }
+        else if (type === 'paused') setVisionStatus('Paused (Struggling)');
+        else if (type === 'status' && msg.message && msg.message.includes('resumed')) setVisionStatus('Resumed');
+        else if (type === 'error') setVisionStatus('Error');
+        else if (type === 'revalidating') setVisionStatus('Revalidating coordinates...');
+
+        // Add a timestamp if missing (for local UI errors)
+        if (!msg.timestamp) {
+          const now = new Date();
+          msg.timestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+        }
+
+        // STATUS/THINKING messages go to browser console only
+        if (type === 'status' || type === 'thinking') {
+          console.log(msg);
+          // Still add THINKING to logs as a subtle indicator
+          if (type === 'thinking') {
+            setLogs((prev) => [...prev, msg]);
+          }
+          return;
+        }
+
+        setLogs((prev) => [...prev, msg]);
+      } catch (e) {
+        console.error("Failed to parse log message:", e);
       }
-      setLogs((prev) => [...prev, msg]);
     };
     ws.onclose = () => {
       setTimeout(connectWebSocket, 3000);
@@ -242,10 +270,10 @@ function App() {
         setIsRunning(true);
         setLogs([]);
       } else {
-        setLogs(prev => [...prev, `ERROR: ${data.message}`]);
+        setLogs(prev => [...prev, {type: 'error', message: data.message}]);
       }
     } catch (e) {
-      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
+      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
     }
   };
 
@@ -258,7 +286,7 @@ function App() {
         setIsPaused(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
+      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
     }
   };
 
@@ -270,7 +298,7 @@ function App() {
         setIsPaused(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
+      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
     }
   };
 
@@ -283,55 +311,55 @@ function App() {
         setIsPaused(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
+      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
     }
   };
 
   const getLogClass = (log) => {
-    const stripped = log.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
-    if (stripped.startsWith('ERROR:')) return 'log-error';
-    if (stripped.startsWith('WARNING:')) return 'log-warning';
-    if (stripped.startsWith('THINKING:')) return 'log-thinking';
-    if (stripped.startsWith('NARRATION:')) return 'log-narration';
-    if (stripped.startsWith('ACTION:')) return 'log-action';
-    if (stripped.startsWith('EXECUTING:')) return 'log-executing';
-    if (stripped.startsWith('PAUSED:')) return 'log-paused';
+    if (!log || !log.type) return '';
+    const { type } = log;
+    if (type === 'error') return 'log-error';
+    if (type === 'warning') return 'log-warning';
+    if (type === 'thinking') return 'log-thinking';
+    if (type === 'narration') return 'log-narration';
+    if (type === 'action') return 'log-action';
+    if (type === 'executing') return 'log-executing';
+    if (type === 'paused') return 'log-paused';
+    if (type === 'revalidating' || type === 'retrying' || type === 'llm' || type === 'llm_assist') return 'log-warning';
     return '';
   };
 
   const formatLog = (log) => {
-    const stripped = log.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
-    const tsMatch = log.match(/^\[(\d{2}:\d{2}:\d{2})\]/);
-    const ts = tsMatch ? tsMatch[1] : '';
+    if (!log || !log.type) return JSON.stringify(log);
+    const ts = log.timestamp || '';
+    const text = log.message || '';
+    const type = log.type;
     
-    if (stripped.startsWith('NARRATION:')) {
-      const text = stripped.replace('NARRATION: ', '');
+    if (type === 'narration') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-narration">THOUGHT</span> {text}</>;
     }
-    if (stripped.startsWith('ACTION:')) {
-      const text = stripped.replace('ACTION: ', '');
+    if (type === 'action') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-action">ACTION</span> {text}</>;
     }
-    if (stripped.startsWith('THINKING:')) {
-      const text = stripped.replace('THINKING: ', '');
+    if (type === 'thinking') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-thinking">...</span> {text}</>;
     }
-    if (stripped.startsWith('EXECUTING:')) {
-      const text = stripped.replace('EXECUTING: ', '');
+    if (type === 'executing') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-executing">EXEC</span> {text}</>;
     }
-    if (stripped.startsWith('PAUSED:')) {
-      const text = stripped.replace('PAUSED: ', '');
+    if (type === 'paused') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-paused">PAUSED</span> {text}</>;
     }
-    if (stripped.startsWith('WARNING:')) {
-      const text = stripped.replace('WARNING: ', '');
+    if (type === 'warning') {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-warning">WARN</span> {text}</>;
     }
-    if (stripped.startsWith('ERROR:')) {
-      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-error">ERROR</span> {stripped.replace('ERROR: ', '')}</>;
+    if (type === 'error') {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-error">ERROR</span> {text}</>;
     }
-    return log;
+    if (type === 'revalidating' || type === 'retrying' || type === 'llm' || type === 'llm_assist') {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-warning">{type.toUpperCase()}</span> {text}</>;
+    }
+    return <><span className="log-ts">{ts}</span> {text}</>;
   };
 
   // ─── CONFIG VIEW (agent not running) ───
@@ -489,7 +517,7 @@ function App() {
         </div>
       )}
 
-      {/* Floating control buttons */}
+            {/* Floating control buttons */}
       {isPaused ? (
         <div className="btn-paused-controls">
           <button className="btn-resume-float" onClick={handleResume}>
@@ -505,6 +533,29 @@ function App() {
           Stop Agent
         </button>
       )}
+
+      {/* Dedicated Vision Status Component */}
+      <div className="vision-status-bar" style={{
+        background: '#1e293b',
+        padding: '10px 20px',
+        margin: '10px 20px 0',
+        borderRadius: '8px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        border: '1px solid #334155'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ fontWeight: 'bold', color: '#94a3b8' }}>VISION STATUS:</div>
+          <div style={{ color: '#e2e8f0' }}>{visionStatus}</div>
+        </div>
+        {currentAction && currentAction.attempt !== undefined && (
+          <div style={{ color: '#cbd5e1', fontSize: '0.9rem' }}>
+            Attempt <span style={{ color: '#38bdf8' }}>{currentAction.attempt}</span>
+            {currentAction.max_retries ? ` / ${currentAction.max_retries}` : ''}
+          </div>
+        )}
+      </div>
 
       {/* Main content: preview + reasoning sidebar */}
       <div className="running-content">

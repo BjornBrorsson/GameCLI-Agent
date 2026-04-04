@@ -5,6 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import asyncio
 import os
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -46,13 +47,15 @@ class InstructionUpdate(BaseModel):
     instructions: str
 
 # Helper to broadcast logs
-async def broadcast_log(message: str):
-    ts = datetime.now().strftime("%H:%M:%S")
-    stamped = f"[{ts}] {message}"
+async def broadcast_log(event: dict):
+    if "timestamp" not in event:
+        event["timestamp"] = datetime.now().strftime("%H:%M:%S")
+    stamped = f"[{event['timestamp']}] {event.get('type', 'log').upper()}: {event.get('message', '')}"
     print(f"BCAST: {stamped}") # Also print to backend console
+    json_str = json.dumps(event)
     for ws in list(connected_websockets):
         try:
-            await ws.send_text(stamped)
+            await ws.send_text(json_str)
         except Exception:
             connected_websockets.discard(ws)
 
