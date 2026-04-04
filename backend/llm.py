@@ -11,11 +11,25 @@ try:
 except ImportError:
     _requests = None
 
-SYSTEM_PROMPT = """
-You are an autonomous AI playing a video game via screenshot analysis and synthetic input.
+LEAD_AGENT_PROMPT = """
+You are the Lead AI Agent playing a video game. Your role is strategy and vision analysis.
 
 INPUT: A screenshot of the current game state + the user's Game Instructions.
-The screenshot has YELLOW COORDINATE RULERS on all four edges — use these to measure positions precisely.
+
+Your task is to analyze the board, consider the Game Instructions, and decide the high-level strategy and immediate next move.
+DO NOT output raw mouse or keyboard commands.
+DO output a clear, concise directive for the Worker Agent explaining what needs to be done.
+Keep your directive focused on the immediate next steps (e.g., "Attack the Goblin on the right", "Select the Strike card and play it on the Jaw Worm", "End the turn").
+
+{role_instructions}
+
+Return only your strategic directive in plain text.
+"""
+
+WORKER_AGENT_PROMPT = """
+You are the Worker AI Agent. Your role is to translate the Lead Agent's strategic directive into precise input commands.
+
+INPUT: A screenshot of the current game state with YELLOW COORDINATE RULERS + the Lead Agent's directive.
 OUTPUT: JSON only. No markdown, no backticks, no text outside the JSON.
 
 FORMAT:
@@ -26,8 +40,6 @@ FORMAT:
     {"command": "click 1450 780", "reason": "Click the End Turn button"}
   ]
 }
-
-{role_instructions}
 
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
 
@@ -241,16 +253,16 @@ class LLMIntegration:
 
     # ── Routing ──
 
-    def _call(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Route to the configured provider."""
         if self.provider == "gemini_cli":
-            return self._call_gemini_cli(prompt_text, image_base64, model_name)
+            return self._call_gemini_cli(prompt_text, image_base64, model_name, expect_json)
         else:
-            return self._call_api(prompt_text, image_base64, model_name)
+            return self._call_api(prompt_text, image_base64, model_name, expect_json)
 
     # ── Gemini CLI (free, default) ──
 
-    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Call Gemini via the local CLI tool. Free but slower."""
         if not re.match(r'^[\w\-\.]+$', model_name):
             raise ValueError(f"Invalid model name format: {model_name}")
@@ -285,6 +297,9 @@ class LLMIntegration:
             )
             content = result.stdout.strip()
 
+            if not expect_json:
+                return content
+
             # Clean up potential markdown wrappers
             clean_content = re.sub(r'```(?:json)?', '', content).strip()
             # Find the first { and the last }
@@ -305,7 +320,7 @@ class LLMIntegration:
 
     # ── API providers (Gemini API / OpenRouter) ──
 
-    def _call_api(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call_api(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Call an OpenAI-compatible chat completions API.
         Works for both Gemini API and OpenRouter.
         """
@@ -383,6 +398,9 @@ class LLMIntegration:
         # Extract content
         content = data["choices"][0]["message"]["content"]
 
+        if not expect_json:
+            return content
+
         # Parse JSON from content
         clean_content = re.sub(r'```(?:json)?', '', content).strip()
         start_idx = clean_content.find('{')
@@ -396,13 +414,32 @@ class LLMIntegration:
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
         try:
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
-            system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
-            prompt = (
-                f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n"
+
+            # Phase 1: Lead Agent dictates strategy
+            lead_prompt = LEAD_AGENT_PROMPT.replace("{role_instructions}", role_instructions)
+            lead_full_prompt = (
+                f"SYSTEM INSTRUCTIONS:\n{lead_prompt}\n\n"
                 f"Game Instructions:\n{game_instructions}\n\n"
-                f"Please analyze the attached screenshot image and respond with the JSON."
+                f"Please analyze the attached screenshot image and provide your strategic directive."
             )
-            return self._call(prompt, image_base64, model_name)
+            directive = self._call(lead_full_prompt, image_base64, model_name, expect_json=False)
+            print(f"  [lead_agent] Directive: {directive}")
+
+            # Phase 2: Worker Agent generates commands based on directive
+            worker_full_prompt = (
+                f"SYSTEM INSTRUCTIONS:\n{WORKER_AGENT_PROMPT}\n\n"
+                f"Lead Agent's Directive:\n{directive}\n\n"
+                f"Please analyze the attached screenshot image with coordinate rulers and the Lead Agent's directive to generate the JSON input commands."
+            )
+
+            worker_response = self._call(worker_full_prompt, image_base64, model_name, expect_json=True)
+
+            # Prepend directive to narration for logs
+            if isinstance(worker_response, dict):
+                original_narration = worker_response.get("narration", "")
+                worker_response["narration"] = f"Lead Agent Directive: {directive}\n\nWorker Agent Narration: {original_narration}"
+
+            return worker_response
         except subprocess.CalledProcessError as e:
             print(f"Gemini CLI error: {e.stderr}")
             return {"narration": f"CLI Error occurred: {e.stderr}", "actions": []}
