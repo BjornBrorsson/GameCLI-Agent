@@ -235,6 +235,7 @@ class LLMIntegration:
         self.provider = provider
         self.api_key = api_key
         self.cost = CostTracker()
+        self.turn_count = 0
         if provider != "gemini_cli" and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
@@ -395,6 +396,7 @@ class LLMIntegration:
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
         try:
+            self.turn_count += 1
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
             system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
             prompt = (
@@ -402,6 +404,10 @@ class LLMIntegration:
                 f"Game Instructions:\n{game_instructions}\n\n"
                 f"Please analyze the attached screenshot image and respond with the JSON."
             )
+
+            if self.turn_count % 5 == 0:
+                prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}"
+
             return self._call(prompt, image_base64, model_name)
         except subprocess.CalledProcessError as e:
             print(f"Gemini CLI error: {e.stderr}")
