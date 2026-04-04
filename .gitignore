@@ -11,6 +11,8 @@ env/
 
 # Environment & secrets
 .env
+*.env
+*.map
 
 # Temp / scratch files
 .tmp/
