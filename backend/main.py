@@ -15,6 +15,7 @@ except ImportError:
 
 from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
+from macro_recorder import recorder
 
 app = FastAPI()
 
@@ -41,6 +42,8 @@ class StartRequest(BaseModel):
     instructions: str
     provider: str = "gemini_cli"
     role: str = "gamer"
+    use_grounding: bool = False
+    grounding_model: str = ""
 
 class InstructionUpdate(BaseModel):
     instructions: str
@@ -113,7 +116,9 @@ async def start_agent(req: StartRequest):
         game_instructions=req.instructions,
         emit_log=broadcast_log,
         provider=req.provider,
-        role=req.role
+        role=req.role,
+        use_grounding=req.use_grounding,
+        grounding_model=req.grounding_model
     )
     return {"status": "success" if success else "error", "message": msg}
 
@@ -134,7 +139,51 @@ async def abort_agent():
 
 @app.get("/api/status")
 def get_status():
-    return {"is_running": agent.is_running, "is_paused": agent.is_paused}
+    return {"is_running": agent.is_running, "is_paused": agent.is_paused, "is_recording_macro": recorder.recording}
+
+class MacroStartRequest(BaseModel):
+    macro_name: str
+
+@app.post("/api/macros/start_recording")
+async def start_macro_recording(req: MacroStartRequest):
+    success, msg = recorder.start_recording(req.macro_name)
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.post("/api/macros/stop_recording")
+async def stop_macro_recording():
+    success, msg = recorder.stop_recording()
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.get("/api/macros")
+def get_macros():
+    return {"macros": list(recorder.get_macros().keys())}
+
+@app.get("/api/session")
+def get_session():
+    """Check if a resumable session exists from a prior crash."""
+    state = agent.session_state.load()
+    if state and not agent.is_running:
+        return {"resumable": True, "session": state}
+    return {"resumable": False}
+
+@app.post("/api/session/clear")
+def clear_session():
+    agent.session_state.clear()
+    return {"status": "success"}
+
+@app.get("/api/recipes")
+def list_recipes():
+    return {"recipes": agent.recipes.list_all()}
+
+@app.post("/api/recipes/{index}/toggle")
+def toggle_recipe(index: int, enabled: bool = True):
+    ok = agent.recipes.toggle(index, enabled)
+    return {"status": "success" if ok else "error"}
+
+@app.delete("/api/recipes/{index}")
+def delete_recipe(index: int):
+    ok = agent.recipes.delete(index)
+    return {"status": "success" if ok else "error"}
 
 # ── Gemini CLI fallback model list (no API key needed) ──
 GEMINI_CLI_MODELS = [
