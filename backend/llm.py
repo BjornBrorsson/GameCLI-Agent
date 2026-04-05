@@ -22,7 +22,7 @@ FORMAT:
 {
   "narration": "Brief calm analysis: what you see, your options, why you chose these actions. Internal monologue only. No greetings, hype, sign-offs, or exclamation marks.",
   "actions": [
-    {"command": "press enter", "reason": "Confirm selection using keyboard"},
+    {"command": "press enter", "reason": "Confirm selection using keyboard", "precondition": "Phase == Combat", "wait_after_condition": "enemy_turn_animation_ends"},
     {"command": "click 1450 780", "reason": "Click the End Turn button"}
   ]
 }
@@ -30,6 +30,7 @@ FORMAT:
 {role_instructions}
 
 Each action is an object with "command" (the input command) and "reason" (short explanation of what this action does and why).
+You can optionally include "precondition" to assert a game state (e.g. "Phase == Combat") before the action executes, and "wait_after_condition" to instruct the agent to pause until a visual animation resolves.
 
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc). PREFERRED for buttons and shortcuts.
@@ -40,6 +41,7 @@ COMMANDS (prefer keyboard over mouse when possible):
 - scroll x y amount — mouse wheel (positive=up, negative=down). For zoom, lists.
 - hover x y — move cursor without clicking. For tooltips, inspection.
 - wait seconds — pause (decimal ok, e.g. 0.5). ONLY when the game needs time for animations.
+- run_macro macro_name — run a pre-recorded sequence of actions (e.g., standard opening combat turns or menu navigation).
 
 KEYBOARD SHORTCUTS — USE THEM:
 - ALWAYS prefer keyboard shortcuts over clicking when they exist.
@@ -49,6 +51,7 @@ KEYBOARD SHORTCUTS — USE THEM:
 - If a shortcut doesn't work, the system will retry — fall back to clicking only after keyboard fails.
 
 COORDINATE PRECISION:
+- The screenshot is always 1280×720 pixels. All coordinates are in this space.
 - The screenshot has yellow rulers on all four edges with tick marks every 50px and labels every 100px.
 - Use these rulers to measure the EXACT center of the element you want to interact with.
 - For drag commands: x1,y1 must be the EXACT CENTER of the source element, x2,y2 must be on the drop target.
@@ -118,14 +121,10 @@ IF THE SCREEN SHOWS A PROMPT, DIALOG, OR SELECTION SCREEN:
 - Then return the remaining planned actions with updated coordinates
 
 COMMANDS (prefer keyboard over mouse when possible):
-- press key — PREFERRED for buttons and shortcuts
-- click / right_click / middle_click / double_click x y
-- drag x1 y1 x2 y2 — use rulers to find EXACT CENTER of source element
-- scroll x y amount
-- hover x y
-- hold_key / release_key key
-- type text
+- press key / hold_key / release_key / type
+- click / right_click / double_click / drag / scroll / hover
 - wait seconds
+- run_macro macro_name
 
 RULES:
 - Use the yellow rulers to measure coordinates precisely — do NOT estimate
@@ -135,7 +134,7 @@ RULES:
 FORMAT:
 {
   "actions": [
-    {"command": "click 750 400", "reason": "Select the target unit"},
+    {"command": "click 750 400", "reason": "Select the target unit", "precondition": "Phase == Combat", "wait_after_condition": "unit_selection_animation"},
     {"command": "press enter", "reason": "Confirm action using keyboard"}
   ]
 }
@@ -235,6 +234,7 @@ class LLMIntegration:
         self.provider = provider
         self.api_key = api_key
         self.cost = CostTracker()
+        self.turn_count = 0
         if provider != "gemini_cli" and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
@@ -393,16 +393,64 @@ class LLMIntegration:
         json_str = clean_content[start_idx:end_idx + 1]
         return json.loads(json_str)
 
-    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
+    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview",
+                        role: str = "gamer", grounding_text: str = "", enabled_tools: list = None):
         try:
+            self.turn_count += 1
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
-            system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
-            prompt = (
-                f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n"
+
+            # Load dynamic tools from tools.json if available (PR #11: Dynamic Tools Registry)
+            extra_commands = ""
+            tools_path = os.path.join(os.path.dirname(__file__), 'tools.json')
+            if os.path.exists(tools_path):
+                try:
+                    with open(tools_path, 'r', encoding='utf-8') as f:
+                        tools = json.load(f)
+                    tool_descs = [
+                        tool.get('description', '')
+                        for name, tool in tools.items()
+                        if enabled_tools is None or name in enabled_tools
+                    ]
+                    if tool_descs:
+                        extra_commands = "\n" + "\n".join(tool_descs)
+                except Exception:
+                    pass
+
+            # Phase 1: Lead Agent dictates strategy
+            lead_prompt_template = LEAD_AGENT_PROMPT.replace("{role_instructions}", role_instructions)
+            lead_full_prompt = (
+                f"SYSTEM INSTRUCTIONS:\n{lead_prompt_template}\n\n"
                 f"Game Instructions:\n{game_instructions}\n\n"
-                f"Please analyze the attached screenshot image and respond with the JSON."
             )
-            return self._call(prompt, image_base64, model_name)
+            if grounding_text:
+                lead_full_prompt += f"\n{grounding_text}\n"
+            if extra_commands:
+                lead_full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+            if self.turn_count % 5 == 0:
+                lead_full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
+            lead_full_prompt += "Please analyze the attached screenshot image and provide your strategic directive."
+
+            directive = self._call(lead_full_prompt, image_base64, model_name, expect_json=False)
+            print(f"  [lead_agent] Directive: {directive}")
+
+            # Phase 2: Worker Agent generates commands based on directive
+            worker_full_prompt = (
+                f"SYSTEM INSTRUCTIONS:\n{WORKER_AGENT_PROMPT}\n"
+            )
+            if extra_commands:
+                worker_full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+            worker_full_prompt += (
+                f"\nLead Agent's Directive:\n{directive}\n\n"
+                f"Please analyze the attached screenshot image and the Lead Agent's directive to generate the JSON input commands."
+            )
+
+            worker_response = self._call(worker_full_prompt, image_base64, model_name, expect_json=True)
+
+            if isinstance(worker_response, dict):
+                original_narration = worker_response.get("narration", "")
+                worker_response["narration"] = f"Lead Agent Directive: {directive}\n\nWorker Agent Narration: {original_narration}"
+
+            return worker_response
         except subprocess.CalledProcessError as e:
             print(f"Gemini CLI error: {e.stderr}")
             return {"narration": f"CLI Error occurred: {e.stderr}", "actions": []}
@@ -442,7 +490,7 @@ class LLMIntegration:
             return None
 
     def revalidate_actions(self, image_base64: str, remaining_actions: list,
-                           game_instructions: str, model_name: str):
+                           game_instructions: str, model_name: str, enabled_tools: list[str] = None):
         """Lightweight LLM call to update coordinates for remaining actions.
         Also handles unexpected prompts/dialogs if the LLM detects one.
         Returns list of action dicts [{"command": ..., "reason": ...}] or None.
@@ -451,8 +499,21 @@ class LLMIntegration:
             f"  {i+1}. {cmd}" + (f" — {reason}" if reason else "")
             for i, (cmd, reason) in enumerate(remaining_actions)
         )
+
+        short_cmds = []
+        tools_path = os.path.join(os.path.dirname(__file__), 'tools.json')
+        if os.path.exists(tools_path):
+            with open(tools_path, 'r', encoding='utf-8') as f:
+                tools = json.load(f)
+            for name, tool in tools.items():
+                if enabled_tools is None or name in enabled_tools:
+                    short_cmds.append(tool.get('short_description', tool.get('description', '')))
+
+        commands_str_short = "\n".join(short_cmds)
+        filled_prompt = REVALIDATE_PROMPT.replace("{commands_list_short}", commands_str_short)
+
         prompt = (
-            f"SYSTEM INSTRUCTIONS:\n{REVALIDATE_PROMPT}\n\n"
+            f"SYSTEM INSTRUCTIONS:\n{filled_prompt}\n\n"
             f"Game context:\n{game_instructions}\n\n"
             f"REMAINING PLANNED ACTIONS:\n{actions_text}\n\n"
             f"Analyze the current screenshot and provide updated action coordinates."

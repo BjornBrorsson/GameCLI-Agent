@@ -27,14 +27,17 @@ function App() {
   const [targetName, setTargetName] = useState('Monitor 1');
   const [instructions, setInstructions] = useState('');
   const [role, setRole] = useState('gamer');
+  const [useGrounding, setUseGrounding] = useState(false);
+  const [groundingModel, setGroundingModel] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [logs, setLogs] = useState([]);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sessionCost, setSessionCost] = useState(null);
-  const [visionStatus, setVisionStatus] = useState('Idle');
-  const [currentAction, setCurrentAction] = useState(null);
+  const [isRecordingMacro, setIsRecordingMacro] = useState(false);
+  const [macroNameInput, setMacroNameInput] = useState('');
+  const [macrosList, setMacrosList] = useState([]);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -47,6 +50,8 @@ function App() {
     fetchInstructions();
     checkStatus();
     connectWebSocket();
+    fetchMacros();
+    checkResumableSession();
 
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -107,7 +112,9 @@ function App() {
           const res = await fetch('http://localhost:8000/api/cost');
           const data = await res.json();
           setSessionCost(data);
-        } catch (e) {}
+        } catch (e) {
+          console.error('Failed to fetch cost', e);
+        }
       };
       fetchCost();
       costIntervalRef.current = setInterval(fetchCost, 5000);
@@ -177,64 +184,115 @@ function App() {
     }
   };
 
+  const checkResumableSession = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/session');
+      const data = await res.json();
+      if (data.resumable && data.session) {
+        const s = data.session;
+        const age = Math.round((Date.now() / 1000 - s.saved_at) / 60);
+        const resume = window.confirm(
+          `A previous session was interrupted ${age} minute(s) ago.\n\n` +
+          `Target: ${s.target_name}\nModel: ${s.model_name}\nRole: ${s.role}\nStep: ${s.step}\n\n` +
+          `Restore settings and continue?`
+        );
+        if (resume) {
+          setTargetType(s.target_type);
+          setTargetName(s.target_name);
+          setSelectedModel(s.model_name);
+          setRole(s.role);
+          setInstructions(s.game_instructions);
+          setProvider(s.provider || 'gemini_cli');
+          setUseGrounding(s.use_grounding || false);
+          setGroundingModel(s.grounding_model || '');
+        } else {
+          await fetch('http://localhost:8000/api/session/clear', { method: 'POST' });
+        }
+      }
+    } catch (e) {}
+  };
+
   const checkStatus = async () => {
     try {
       const res = await fetch('http://localhost:8000/api/status');
       const data = await res.json();
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
-    } catch (e) {}
+      setIsRecordingMacro(data.is_recording_macro || false);
+    } catch (e) {
+      console.error('Failed to check status', e);
+    }
+  };
+
+  const fetchMacros = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/macros');
+      const data = await res.json();
+      setMacrosList(data.macros || []);
+    } catch (e) {
+      console.error("Failed to fetch macros", e);
+    }
+  };
+
+  const handleToggleMacroRecording = async () => {
+    if (isRecordingMacro) {
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/stop_recording', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(false);
+          setMacroNameInput('');
+          fetchMacros(); // Refresh list
+        }
+      } catch (e) {
+        console.error("Failed to stop macro recording", e);
+      }
+    } else {
+      if (!macroNameInput.trim()) {
+        alert('Please enter a macro name before recording.');
+        return;
+      }
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/start_recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ macro_name: macroNameInput.trim() })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(true);
+        } else {
+          alert('Failed to start recording: ' + data.message);
+        }
+      } catch (e) {
+        console.error("Failed to start macro recording", e);
+      }
+    }
   };
 
   const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        const { type } = msg;
-
-        // Detect PAUSED state from backend
-        if (type === 'paused') {
-          setIsPaused(true);
-        }
-        if (type === 'status' && msg.message && msg.message.includes('resumed')) {
-          setIsPaused(false);
-        }
-
-        // Track structured events for dedicated UI components
-        if (type === 'thinking') setVisionStatus('Analyzing screen...');
-        else if (type === 'executing') {
-          setVisionStatus(`Executing: ${msg.command}`);
-          setCurrentAction({ command: msg.command, reason: msg.reason, attempt: msg.attempt, max_retries: msg.max_retries });
-        }
-        else if (type === 'action_retry') {
-          setVisionStatus(`Retrying action ${msg.action_index} (Attempt ${msg.attempt}/${msg.max_retries})`);
-        }
-        else if (type === 'paused') setVisionStatus('Paused (Struggling)');
-        else if (type === 'status' && msg.message && msg.message.includes('resumed')) setVisionStatus('Resumed');
-        else if (type === 'error') setVisionStatus('Error');
-        else if (type === 'revalidating') setVisionStatus('Revalidating coordinates...');
-
-        // Add a timestamp if missing (for local UI errors)
-        if (!msg.timestamp) {
-          const now = new Date();
-          msg.timestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-        }
-
-        // STATUS/THINKING messages go to browser console only
-        if (type === 'status' || type === 'thinking') {
-          console.log(msg);
-          // Still add THINKING to logs as a subtle indicator
-          if (type === 'thinking') {
-            setLogs((prev) => [...prev, msg]);
-          }
-          return;
-        }
-
-        setLogs((prev) => [...prev, msg]);
-      } catch (e) {
-        console.error("Failed to parse log message:", e);
+      const msg = event.data;
+      // Strip timestamp prefix for classification
+      const stripped = msg.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+      // Detect PAUSED state from backend
+      if (stripped.startsWith('PAUSED:')) {
+        setIsPaused(true);
       }
+      if (stripped.startsWith('STATUS:') && stripped.includes('resumed')) {
+        setIsPaused(false);
+      }
+      // STATUS/THINKING messages go to browser console only
+      if (stripped.startsWith('STATUS:') || stripped.startsWith('THINKING:')) {
+        console.log(msg);
+        // Still add THINKING to logs as a subtle indicator
+        if (stripped.startsWith('THINKING:')) {
+          setLogs((prev) => [...prev, msg]);
+        }
+        return;
+      }
+      setLogs((prev) => [...prev, msg]);
     };
     ws.onclose = () => {
       setTimeout(connectWebSocket, 3000);
@@ -261,7 +319,9 @@ function App() {
           model_name: modelToUse,
           instructions: instructions,
           provider: provider,
-          role: role
+          role: role,
+          use_grounding: useGrounding,
+          grounding_model: groundingModel
         })
       });
       
@@ -270,10 +330,10 @@ function App() {
         setIsRunning(true);
         setLogs([]);
       } else {
-        setLogs(prev => [...prev, {type: 'error', message: data.message}]);
+        setLogs(prev => [...prev, `ERROR: ${data.message}`]);
       }
     } catch (e) {
-      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
+      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
     }
   };
 
@@ -286,7 +346,7 @@ function App() {
         setIsPaused(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
+      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
     }
   };
 
@@ -296,6 +356,7 @@ function App() {
       const data = await res.json();
       if (data.status === 'success') {
         setIsPaused(false);
+        setIsAwaitingApproval(false);
       }
     } catch (e) {
       setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
@@ -311,55 +372,55 @@ function App() {
         setIsPaused(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
+      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
     }
   };
 
   const getLogClass = (log) => {
-    if (!log || !log.type) return '';
-    const { type } = log;
-    if (type === 'error') return 'log-error';
-    if (type === 'warning') return 'log-warning';
-    if (type === 'thinking') return 'log-thinking';
-    if (type === 'narration') return 'log-narration';
-    if (type === 'action') return 'log-action';
-    if (type === 'executing') return 'log-executing';
-    if (type === 'paused') return 'log-paused';
-    if (type === 'revalidating' || type === 'retrying' || type === 'llm' || type === 'llm_assist') return 'log-warning';
+    const stripped = log.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+    if (stripped.startsWith('ERROR:')) return 'log-error';
+    if (stripped.startsWith('WARNING:')) return 'log-warning';
+    if (stripped.startsWith('THINKING:')) return 'log-thinking';
+    if (stripped.startsWith('NARRATION:')) return 'log-narration';
+    if (stripped.startsWith('ACTION:')) return 'log-action';
+    if (stripped.startsWith('EXECUTING:')) return 'log-executing';
+    if (stripped.startsWith('PAUSED:')) return 'log-paused';
     return '';
   };
 
   const formatLog = (log) => {
-    if (!log || !log.type) return JSON.stringify(log);
-    const ts = log.timestamp || '';
-    const text = log.message || '';
-    const type = log.type;
+    const stripped = log.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+    const tsMatch = log.match(/^\[(\d{2}:\d{2}:\d{2})\]/);
+    const ts = tsMatch ? tsMatch[1] : '';
     
-    if (type === 'narration') {
+    if (stripped.startsWith('NARRATION:')) {
+      const text = stripped.replace('NARRATION: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-narration">THOUGHT</span> {text}</>;
     }
-    if (type === 'action') {
+    if (stripped.startsWith('ACTION:')) {
+      const text = stripped.replace('ACTION: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-action">ACTION</span> {text}</>;
     }
-    if (type === 'thinking') {
+    if (stripped.startsWith('THINKING:')) {
+      const text = stripped.replace('THINKING: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-thinking">...</span> {text}</>;
     }
-    if (type === 'executing') {
+    if (stripped.startsWith('EXECUTING:')) {
+      const text = stripped.replace('EXECUTING: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-executing">EXEC</span> {text}</>;
     }
-    if (type === 'paused') {
+    if (stripped.startsWith('PAUSED:')) {
+      const text = stripped.replace('PAUSED: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-paused">PAUSED</span> {text}</>;
     }
-    if (type === 'warning') {
+    if (stripped.startsWith('WARNING:')) {
+      const text = stripped.replace('WARNING: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-warning">WARN</span> {text}</>;
     }
-    if (type === 'error') {
-      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-error">ERROR</span> {text}</>;
+    if (stripped.startsWith('ERROR:')) {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-error">ERROR</span> {stripped.replace('ERROR: ', '')}</>;
     }
-    if (type === 'revalidating' || type === 'retrying' || type === 'llm' || type === 'llm_assist') {
-      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-warning">{type.toUpperCase()}</span> {text}</>;
-    }
-    return <><span className="log-ts">{ts}</span> {text}</>;
+    return log;
   };
 
   // ─── CONFIG VIEW (agent not running) ───
@@ -460,6 +521,24 @@ function App() {
                 {ROLES.map(r => <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>)}
               </select>
 
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={useGrounding} onChange={e => setUseGrounding(e.target.checked)} />
+                Visual Grounding
+                <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(UI element detection — extra LLM call per step, improves click accuracy)</span>
+              </label>
+
+              {useGrounding && (
+                <>
+                  <label>Grounding Model <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(leave blank to use main model)</span></label>
+                  <input
+                    type="text"
+                    value={groundingModel}
+                    onChange={e => setGroundingModel(e.target.value)}
+                    placeholder="e.g. gemini-2.0-flash (fast/cheap)"
+                  />
+                </>
+              )}
+
               <label>Game Instructions (Markdown)</label>
               <textarea 
                 value={instructions} 
@@ -471,7 +550,7 @@ function App() {
                 <button
                   className="btn-start"
                   onClick={handleStart}
-                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel)}
+                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel) || isRecordingMacro}
                 >
                   Start Agent
                 </button>
@@ -499,6 +578,49 @@ function App() {
                 }
               </div>
             </div>
+
+            <div className="card">
+              <h2>Watch Me Play (Macro Recording)</h2>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <input
+                  type="text"
+                  placeholder="Macro Name (e.g., start_battle)"
+                  value={macroNameInput}
+                  onChange={(e) => setMacroNameInput(e.target.value)}
+                  disabled={isRecordingMacro}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={handleToggleMacroRecording}
+                  style={{
+                    backgroundColor: isRecordingMacro ? 'var(--danger)' : 'var(--success)',
+                    color: 'white',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {isRecordingMacro ? 'Stop Recording' : 'Start Recording'}
+                </button>
+              </div>
+
+              {isRecordingMacro && (
+                <div style={{ color: 'var(--danger)', fontSize: '0.85rem', marginBottom: '1rem', animation: 'pulse 1s infinite' }}>
+                  🔴 Recording... Perform actions in the game now.
+                </div>
+              )}
+
+              <label>Saved Macros</label>
+              {macrosList.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No macros saved yet.</div>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  {macrosList.map((m, i) => <li key={i}>{m}</li>)}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       </>
@@ -521,7 +643,7 @@ function App() {
       {isPaused ? (
         <div className="btn-paused-controls">
           <button className="btn-resume-float" onClick={handleResume}>
-            Continue Agent
+            {isAwaitingApproval ? 'Approve Action' : 'Continue Agent'}
           </button>
           <button className="btn-abort-float" onClick={handleAbort}>
             Abort
