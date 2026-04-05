@@ -108,7 +108,9 @@ function App() {
           const res = await fetch('http://localhost:8000/api/cost');
           const data = await res.json();
           setSessionCost(data);
-        } catch (e) {}
+        } catch (e) {
+          console.error('Failed to fetch cost', e);
+        }
       };
       fetchCost();
       costIntervalRef.current = setInterval(fetchCost, 5000);
@@ -212,7 +214,9 @@ function App() {
       const data = await res.json();
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
-    } catch (e) {}
+    } catch (e) {
+      console.error('Failed to check status', e);
+    }
   };
 
   const connectWebSocket = () => {
