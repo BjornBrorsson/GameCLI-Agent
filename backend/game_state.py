@@ -90,6 +90,20 @@ PHASE_KEYWORDS = {
     ],
 }
 
+# Define which tools are available in which game phase. This dynamic tool subsetting
+# massively reduces hallucinated actions and token context length.
+PHASE_TOOLS = {
+    GamePhase.COMBAT: ["press", "click", "wait", "set_objective"],
+    GamePhase.NAVIGATION: ["press", "click", "drag", "hold_key", "hover", "wait", "set_objective"],
+    GamePhase.MENU: ["press", "click", "scroll", "wait", "set_objective"],
+    GamePhase.DIALOGUE: ["press", "click", "wait", "set_objective"],
+    GamePhase.REWARD: ["press", "click", "hover", "wait", "set_objective"],
+    GamePhase.SHOP: ["press", "click", "scroll", "hover", "wait", "set_objective"],
+    GamePhase.GAME_OVER: ["press", "click", "wait", "set_objective"],
+    GamePhase.VICTORY: ["press", "click", "wait", "set_objective"],
+    GamePhase.UNKNOWN: ["press", "hold_key", "type", "click", "drag", "scroll", "hover", "wait", "set_objective"]
+}
+
 
 # ── Data Classes (game-agnostic) ──
 

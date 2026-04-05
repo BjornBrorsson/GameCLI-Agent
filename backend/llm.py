@@ -99,6 +99,13 @@ ROLE_PROMPTS = {
         "- In your narration, briefly note your routing decisions and time-saving choices.\n"
         "- Accept higher risk if it saves significant time."
     ),
+    "explorer": (
+        "ROLE: Explorer — You are mapping out unknown areas and looking for secrets.\n"
+        "- Prioritize checking unrevealed map boundaries, doors, and interactive objects.\n"
+        "- Avoid combat if possible. If dragged into combat, try to flee or finish it quickly to resume exploring.\n"
+        "- Be highly tolerant of random movements or walking into walls to test bounds.\n"
+        "- Ignore optimization or primary quest objectives temporarily to focus on mapping."
+    ),
 }
 
 DEFAULT_ROLE = "gamer"
@@ -570,3 +577,33 @@ class LLMIntegration:
         except Exception as e:
             print(f"[revalidate] Error: {e}")
             return None
+
+    def verify_action_success(self, after_base64: str, action_taken: str, model_name: str = "gemini-2.5-flash") -> bool:
+        """Lightweight check to see if the action actually changed the game state.
+        Note: Passing a single 'after' image relies on the LLM deducing success from the
+        current state alone to save context limits and ensure API compatibility.
+        """
+        verify_prompt = """
+You are a meticulous verification agent checking if a specific action succeeded in a game.
+
+INPUT:
+You will be provided TWO screenshots side-by-side using the structure below (if your API supports multiple images) or instructed to analyze the latest state.
+You must determine if the specific action taken had a visible effect on the game state.
+
+ACTION TAKEN: {action_taken}
+
+OUTPUT:
+Respond ONLY with JSON matching this exactly:
+{
+  "did_succeed": true or false,
+  "reason": "Brief explanation of what changed or why it failed."
+}
+"""
+        filled_prompt = verify_prompt.replace("{action_taken}", action_taken)
+        prompt = f"SYSTEM: {filled_prompt}\nAnalyze the screenshot and determine if the action appears to have executed successfully."
+        try:
+            result = self._call(prompt, after_base64, model_name, expect_json=True)
+            return result.get("did_succeed", True)
+        except Exception as e:
+            print(f"[verify] Verification failed (assuming success to avoid hard blocks): {e}")
+            return True

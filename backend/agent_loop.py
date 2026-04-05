@@ -9,7 +9,7 @@ import pygetwindow as gw
 from screen_capture import ScreenCapture
 from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
 from action_verifier import ActionVerifier
-from game_state import detect_phase
+from game_state import detect_phase, PHASE_TOOLS
 from llm import LLMIntegration, BudgetExceededException
 from logger import SessionLogger, ExecutionLogger
 from safety import SafetyFilter
@@ -267,12 +267,22 @@ class AgentLoop:
                         else:
                             await _console_log(f"  [grounding] No elements detected — falling back to rulers only")
 
+                    # Add workflow objective context
+                    objective = self.session_state._state.get("objective")
+                    if objective:
+                        experience_text += f"\n\n=== CURRENT OBJECTIVE / QUEST ===\n{objective}\n================================="
+
                     # Combine extra context for the LLM
                     extra_context = "\n\n".join(filter(None, [grounding_text, experience_text]))
 
+                    # ── Contextual Tool Pools ──
+                    current_phase, _ = await asyncio.to_thread(detect_phase, reference_pil)
+                    active_tools = PHASE_TOOLS.get(current_phase, PHASE_TOOLS["unknown"])
+                    await _console_log(f"  [tools] Detected phase '{current_phase}' — limiting to {len(active_tools)} tools")
+
                     # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
                     response, should_continue = await _handle_budget_call(
-                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context)
+                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools)
                     )
                     if not should_continue:
                         break
@@ -353,6 +363,17 @@ class AgentLoop:
                             exec_log.log(f"  [skip] {msg}")
                             action_index += 1
                             continue
+
+                    # ── Workflow State (Quest Tracker) ──
+                    if cmd.startswith("set_objective"):
+                        objective_text = cmd.replace("set_objective", "").strip()
+                        if not objective_text and reason:
+                            objective_text = reason
+                        self.session_state._state["objective"] = objective_text
+                        await _console_log(f"  [quest tracker] Objective updated: {objective_text}")
+                        await emit_log(f"STATUS: Objective updated to: {objective_text}")
+                        action_index += 1
+                        continue
 
                     # ── Safety check ──
                     safe, block_reason = self.safety.check(cmd, reason)
@@ -507,6 +528,17 @@ class AgentLoop:
                                 await _console_log(f"  [!] Drag appeared to succeed but screen reverted (snap-back)")
 
                         exec_log.log_result(attempt, changed, stable)
+
+                        if changed:
+                            # ── Verify Agent Sub-role ──
+                            if role == "gamer" and getattr(self, 'llm', None):
+                                await _console_log("  [verify] Asking Verify Agent if game state progressed...")
+                                after_b64 = self.screen_capture.pil_to_base64(after_pil)
+                                verified = await asyncio.to_thread(self.llm.verify_action_success, after_b64, exec_label)
+                                if not verified:
+                                    changed = False
+                                    await _console_log("  [!] Screen changed visually, but Verify Agent ruled action failed.")
+                                    exec_log.log("  [verify] Failed: LLM says no progression.")
 
                         if changed:
                             await _console_log(f"  ✓ Action {action_index+1} succeeded on attempt {attempt}")

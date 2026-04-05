@@ -11,3 +11,4 @@ python-dotenv
 websockets
 requests
 mcp
+pynput

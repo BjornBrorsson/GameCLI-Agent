@@ -232,7 +232,7 @@ def _rebuild_action(action_str: str, new_coords: List[Tuple[int, int]]) -> str:
 class ActionVerifier:
     """Verifies and adjusts action coordinates using local template matching."""
 
-    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit"]
+    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit", "reset", "load"]
 
     def __init__(self):
         self.last_adjustments: List[dict] = []  # log of recent adjustments
