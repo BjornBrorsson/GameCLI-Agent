@@ -31,6 +31,7 @@ function App() {
   const [groundingModel, setGroundingModel] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [isAwaitingApproval, setIsAwaitingApproval] = useState(false);
   const [logs, setLogs] = useState([]);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -280,8 +281,13 @@ function App() {
       if (stripped.startsWith('PAUSED:')) {
         setIsPaused(true);
       }
+      if (stripped.startsWith('REQUIRES_APPROVAL:')) {
+        setIsPaused(true);
+        setIsAwaitingApproval(true);
+      }
       if (stripped.startsWith('STATUS:') && stripped.includes('resumed')) {
         setIsPaused(false);
+        setIsAwaitingApproval(false);
       }
       // STATUS/THINKING messages go to browser console only
       if (stripped.startsWith('STATUS:') || stripped.startsWith('THINKING:')) {
@@ -356,6 +362,7 @@ function App() {
       const data = await res.json();
       if (data.status === 'success') {
         setIsPaused(false);
+        setIsAwaitingApproval(false);
       }
     } catch (e) {
       setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
@@ -369,6 +376,7 @@ function App() {
       if (data.status === 'success') {
         setIsRunning(false);
         setIsPaused(false);
+        setIsAwaitingApproval(false);
       }
     } catch (e) {
       setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
@@ -384,6 +392,7 @@ function App() {
     if (stripped.startsWith('ACTION:')) return 'log-action';
     if (stripped.startsWith('EXECUTING:')) return 'log-executing';
     if (stripped.startsWith('PAUSED:')) return 'log-paused';
+    if (stripped.startsWith('REQUIRES_APPROVAL:')) return 'log-paused';
     return '';
   };
 
@@ -411,6 +420,10 @@ function App() {
     if (stripped.startsWith('PAUSED:')) {
       const text = stripped.replace('PAUSED: ', '');
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-paused">PAUSED</span> {text}</>;
+    }
+    if (stripped.startsWith('REQUIRES_APPROVAL:')) {
+      const text = stripped.replace('REQUIRES_APPROVAL: ', '');
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-paused">APPROVAL REQUIRED</span> {text}</>;
     }
     if (stripped.startsWith('WARNING:')) {
       const text = stripped.replace('WARNING: ', '');
@@ -642,7 +655,7 @@ function App() {
       {isPaused ? (
         <div className="btn-paused-controls">
           <button className="btn-resume-float" onClick={handleResume}>
-            Continue Agent
+            {isAwaitingApproval ? 'Approve Action' : 'Continue Agent'}
           </button>
           <button className="btn-abort-float" onClick={handleAbort}>
             Abort
@@ -671,7 +684,7 @@ function App() {
             <div className="reasoning-title">Agent Reasoning</div>
             <div className={`status-badge ${isPaused ? 'status-paused' : 'status-running'}`} style={{fontSize: '0.65rem', padding: '2px 8px'}}>
               <div className="dot"></div>
-              {isPaused ? 'Paused' : 'Live'}
+              {isPaused ? (isAwaitingApproval ? 'Awaiting Approval' : 'Paused') : 'Live'}
             </div>
           </div>
           <div className="reasoning-messages">
