@@ -5,6 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import asyncio
 import os
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +16,7 @@ except ImportError:
 
 from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
+from macro_recorder import recorder
 
 app = FastAPI()
 
@@ -41,19 +43,23 @@ class StartRequest(BaseModel):
     instructions: str
     provider: str = "gemini_cli"
     role: str = "gamer"
+    use_grounding: bool = False
+    grounding_model: str = ""
     max_budget_usd: float = 0.0
 
 class InstructionUpdate(BaseModel):
     instructions: str
 
 # Helper to broadcast logs
-async def broadcast_log(message: str):
-    ts = datetime.now().strftime("%H:%M:%S")
-    stamped = f"[{ts}] {message}"
+async def broadcast_log(event: dict):
+    if "timestamp" not in event:
+        event["timestamp"] = datetime.now().strftime("%H:%M:%S")
+    stamped = f"[{event['timestamp']}] {event.get('type', 'log').upper()}: {event.get('message', '')}"
     print(f"BCAST: {stamped}") # Also print to backend console
+    json_str = json.dumps(event)
     for ws in list(connected_websockets):
         try:
-            await ws.send_text(stamped)
+            await ws.send_text(json_str)
         except Exception:
             connected_websockets.discard(ws)
 
@@ -115,6 +121,8 @@ async def start_agent(req: StartRequest):
         emit_log=broadcast_log,
         provider=req.provider,
         role=req.role,
+        use_grounding=req.use_grounding,
+        grounding_model=req.grounding_model,
         max_budget_usd=req.max_budget_usd
     )
     return {"status": "success" if success else "error", "message": msg}
@@ -136,7 +144,51 @@ async def abort_agent():
 
 @app.get("/api/status")
 def get_status():
-    return {"is_running": agent.is_running, "is_paused": agent.is_paused}
+    return {"is_running": agent.is_running, "is_paused": agent.is_paused, "is_recording_macro": recorder.recording}
+
+class MacroStartRequest(BaseModel):
+    macro_name: str
+
+@app.post("/api/macros/start_recording")
+async def start_macro_recording(req: MacroStartRequest):
+    success, msg = recorder.start_recording(req.macro_name)
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.post("/api/macros/stop_recording")
+async def stop_macro_recording():
+    success, msg = recorder.stop_recording()
+    return {"status": "success" if success else "error", "message": msg}
+
+@app.get("/api/macros")
+def get_macros():
+    return {"macros": list(recorder.get_macros().keys())}
+
+@app.get("/api/session")
+def get_session():
+    """Check if a resumable session exists from a prior crash."""
+    state = agent.session_state.load()
+    if state and not agent.is_running:
+        return {"resumable": True, "session": state}
+    return {"resumable": False}
+
+@app.post("/api/session/clear")
+def clear_session():
+    agent.session_state.clear()
+    return {"status": "success"}
+
+@app.get("/api/recipes")
+def list_recipes():
+    return {"recipes": agent.recipes.list_all()}
+
+@app.post("/api/recipes/{index}/toggle")
+def toggle_recipe(index: int, enabled: bool = True):
+    ok = agent.recipes.toggle(index, enabled)
+    return {"status": "success" if ok else "error"}
+
+@app.delete("/api/recipes/{index}")
+def delete_recipe(index: int):
+    ok = agent.recipes.delete(index)
+    return {"status": "success" if ok else "error"}
 
 # ── Gemini CLI fallback model list (no API key needed) ──
 GEMINI_CLI_MODELS = [

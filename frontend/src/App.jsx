@@ -27,12 +27,17 @@ function App() {
   const [targetName, setTargetName] = useState('Monitor 1');
   const [instructions, setInstructions] = useState('');
   const [role, setRole] = useState('gamer');
+  const [useGrounding, setUseGrounding] = useState(false);
+  const [groundingModel, setGroundingModel] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [logs, setLogs] = useState([]);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sessionCost, setSessionCost] = useState(null);
+  const [isRecordingMacro, setIsRecordingMacro] = useState(false);
+  const [macroNameInput, setMacroNameInput] = useState('');
+  const [macrosList, setMacrosList] = useState([]);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -45,6 +50,8 @@ function App() {
     fetchInstructions();
     checkStatus();
     connectWebSocket();
+    fetchMacros();
+    checkResumableSession();
 
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -105,7 +112,9 @@ function App() {
           const res = await fetch('http://localhost:8000/api/cost');
           const data = await res.json();
           setSessionCost(data);
-        } catch (e) {}
+        } catch (e) {
+          console.error('Failed to fetch cost', e);
+        }
       };
       fetchCost();
       costIntervalRef.current = setInterval(fetchCost, 5000);
@@ -175,13 +184,90 @@ function App() {
     }
   };
 
+  const checkResumableSession = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/session');
+      const data = await res.json();
+      if (data.resumable && data.session) {
+        const s = data.session;
+        const age = Math.round((Date.now() / 1000 - s.saved_at) / 60);
+        const resume = window.confirm(
+          `A previous session was interrupted ${age} minute(s) ago.\n\n` +
+          `Target: ${s.target_name}\nModel: ${s.model_name}\nRole: ${s.role}\nStep: ${s.step}\n\n` +
+          `Restore settings and continue?`
+        );
+        if (resume) {
+          setTargetType(s.target_type);
+          setTargetName(s.target_name);
+          setSelectedModel(s.model_name);
+          setRole(s.role);
+          setInstructions(s.game_instructions);
+          setProvider(s.provider || 'gemini_cli');
+          setUseGrounding(s.use_grounding || false);
+          setGroundingModel(s.grounding_model || '');
+        } else {
+          await fetch('http://localhost:8000/api/session/clear', { method: 'POST' });
+        }
+      }
+    } catch (e) {}
+  };
+
   const checkStatus = async () => {
     try {
       const res = await fetch('http://localhost:8000/api/status');
       const data = await res.json();
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
-    } catch (e) {}
+      setIsRecordingMacro(data.is_recording_macro || false);
+    } catch (e) {
+      console.error('Failed to check status', e);
+    }
+  };
+
+  const fetchMacros = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/macros');
+      const data = await res.json();
+      setMacrosList(data.macros || []);
+    } catch (e) {
+      console.error("Failed to fetch macros", e);
+    }
+  };
+
+  const handleToggleMacroRecording = async () => {
+    if (isRecordingMacro) {
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/stop_recording', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(false);
+          setMacroNameInput('');
+          fetchMacros(); // Refresh list
+        }
+      } catch (e) {
+        console.error("Failed to stop macro recording", e);
+      }
+    } else {
+      if (!macroNameInput.trim()) {
+        alert('Please enter a macro name before recording.');
+        return;
+      }
+      try {
+        const res = await fetch('http://localhost:8000/api/macros/start_recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ macro_name: macroNameInput.trim() })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          setIsRecordingMacro(true);
+        } else {
+          alert('Failed to start recording: ' + data.message);
+        }
+      } catch (e) {
+        console.error("Failed to start macro recording", e);
+      }
+    }
   };
 
   const connectWebSocket = () => {
@@ -233,7 +319,9 @@ function App() {
           model_name: modelToUse,
           instructions: instructions,
           provider: provider,
-          role: role
+          role: role,
+          use_grounding: useGrounding,
+          grounding_model: groundingModel
         })
       });
       
@@ -268,9 +356,10 @@ function App() {
       const data = await res.json();
       if (data.status === 'success') {
         setIsPaused(false);
+        setIsAwaitingApproval(false);
       }
     } catch (e) {
-      setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
+      setLogs(prev => [...prev, {type: 'error', message: `Could not connect to backend: ${e.message}`}]);
     }
   };
 
@@ -432,6 +521,24 @@ function App() {
                 {ROLES.map(r => <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>)}
               </select>
 
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={useGrounding} onChange={e => setUseGrounding(e.target.checked)} />
+                Visual Grounding
+                <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(UI element detection — extra LLM call per step, improves click accuracy)</span>
+              </label>
+
+              {useGrounding && (
+                <>
+                  <label>Grounding Model <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(leave blank to use main model)</span></label>
+                  <input
+                    type="text"
+                    value={groundingModel}
+                    onChange={e => setGroundingModel(e.target.value)}
+                    placeholder="e.g. gemini-2.0-flash (fast/cheap)"
+                  />
+                </>
+              )}
+
               <label>Game Instructions (Markdown)</label>
               <textarea 
                 value={instructions} 
@@ -443,7 +550,7 @@ function App() {
                 <button
                   className="btn-start"
                   onClick={handleStart}
-                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel)}
+                  disabled={(providerInfo?.needsKey && !apiKey) || (!customModel.trim() && !selectedModel) || isRecordingMacro}
                 >
                   Start Agent
                 </button>
@@ -471,6 +578,49 @@ function App() {
                 }
               </div>
             </div>
+
+            <div className="card">
+              <h2>Watch Me Play (Macro Recording)</h2>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <input
+                  type="text"
+                  placeholder="Macro Name (e.g., start_battle)"
+                  value={macroNameInput}
+                  onChange={(e) => setMacroNameInput(e.target.value)}
+                  disabled={isRecordingMacro}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={handleToggleMacroRecording}
+                  style={{
+                    backgroundColor: isRecordingMacro ? 'var(--danger)' : 'var(--success)',
+                    color: 'white',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {isRecordingMacro ? 'Stop Recording' : 'Start Recording'}
+                </button>
+              </div>
+
+              {isRecordingMacro && (
+                <div style={{ color: 'var(--danger)', fontSize: '0.85rem', marginBottom: '1rem', animation: 'pulse 1s infinite' }}>
+                  🔴 Recording... Perform actions in the game now.
+                </div>
+              )}
+
+              <label>Saved Macros</label>
+              {macrosList.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No macros saved yet.</div>
+              ) : (
+                <ul style={{ margin: 0, paddingLeft: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  {macrosList.map((m, i) => <li key={i}>{m}</li>)}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       </>
@@ -489,11 +639,11 @@ function App() {
         </div>
       )}
 
-      {/* Floating control buttons */}
+            {/* Floating control buttons */}
       {isPaused ? (
         <div className="btn-paused-controls">
           <button className="btn-resume-float" onClick={handleResume}>
-            Continue Agent
+            {isAwaitingApproval ? 'Approve Action' : 'Continue Agent'}
           </button>
           <button className="btn-abort-float" onClick={handleAbort}>
             Abort
@@ -505,6 +655,29 @@ function App() {
           Stop Agent
         </button>
       )}
+
+      {/* Dedicated Vision Status Component */}
+      <div className="vision-status-bar" style={{
+        background: '#1e293b',
+        padding: '10px 20px',
+        margin: '10px 20px 0',
+        borderRadius: '8px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        border: '1px solid #334155'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ fontWeight: 'bold', color: '#94a3b8' }}>VISION STATUS:</div>
+          <div style={{ color: '#e2e8f0' }}>{visionStatus}</div>
+        </div>
+        {currentAction && currentAction.attempt !== undefined && (
+          <div style={{ color: '#cbd5e1', fontSize: '0.9rem' }}>
+            Attempt <span style={{ color: '#38bdf8' }}>{currentAction.attempt}</span>
+            {currentAction.max_retries ? ` / ${currentAction.max_retries}` : ''}
+          </div>
+        )}
+      </div>
 
       {/* Main content: preview + reasoning sidebar */}
       <div className="running-content">
