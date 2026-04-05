@@ -50,6 +50,7 @@ KEYBOARD SHORTCUTS — USE THEM:
 - If a shortcut doesn't work, the system will retry — fall back to clicking only after keyboard fails.
 
 COORDINATE PRECISION:
+- The screenshot is always 1280×720 pixels. All coordinates are in this space.
 - The screenshot has yellow rulers on all four edges with tick marks every 50px and labels every 100px.
 - Use these rulers to measure the EXACT center of the element you want to interact with.
 - For drag commands: x1,y1 must be the EXACT CENTER of the source element, x2,y2 must be on the drop target.
@@ -236,6 +237,7 @@ class LLMIntegration:
         self.provider = provider
         self.api_key = api_key
         self.cost = CostTracker()
+        self.turn_count = 0
         if provider != "gemini_cli" and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
@@ -394,15 +396,23 @@ class LLMIntegration:
         json_str = clean_content[start_idx:end_idx + 1]
         return json.loads(json_str)
 
-    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview", role: str = "gamer"):
+    def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview",
+                        role: str = "gamer", grounding_text: str = ""):
         try:
+            self.turn_count += 1
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
             system_prompt = SYSTEM_PROMPT.replace("{role_instructions}", role_instructions)
+            grounding_section = f"\n{grounding_text}\n" if grounding_text else ""
             prompt = (
                 f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\n"
                 f"Game Instructions:\n{game_instructions}\n\n"
+                f"{grounding_section}"
                 f"Please analyze the attached screenshot image and respond with the JSON."
             )
+
+            if self.turn_count % 5 == 0:
+                prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}"
+
             return self._call(prompt, image_base64, model_name)
         except subprocess.CalledProcessError as e:
             print(f"Gemini CLI error: {e.stderr}")

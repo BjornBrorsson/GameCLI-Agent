@@ -10,3 +10,4 @@ pytesseract
 python-dotenv
 websockets
 requests
+mcp

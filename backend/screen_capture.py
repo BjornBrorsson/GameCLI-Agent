@@ -6,9 +6,33 @@ import numpy as np
 import io
 import base64
 
+# Normalize all screenshots to this resolution before sending to the LLM.
+# This gives the LLM a consistent coordinate space regardless of monitor
+# size or window dimensions.  Coordinates in LLM responses are in this
+# space and get scaled back to native resolution before execution.
+NORM_WIDTH  = 1280
+NORM_HEIGHT = 720
+
+
 class ScreenCapture:
     def __init__(self):
         pass  # No shared mss state — created per call for thread safety
+
+    @staticmethod
+    def _normalize(img: Image.Image):
+        """Scale *img* to the standard NORM_WIDTH×NORM_HEIGHT resolution.
+
+        Returns (resized_img, scale_x, scale_y) where scale_x/scale_y are
+        the multipliers to convert normalised coordinates back to the
+        original image size (>=1.0 when downscaling, <1.0 when upscaling).
+        """
+        orig_w, orig_h = img.size
+        if orig_w == NORM_WIDTH and orig_h == NORM_HEIGHT:
+            return img, 1.0, 1.0
+        resized = img.resize((NORM_WIDTH, NORM_HEIGHT), Image.Resampling.LANCZOS)
+        scale_x = orig_w / NORM_WIDTH
+        scale_y = orig_h / NORM_HEIGHT
+        return resized, scale_x, scale_y
 
     def get_available_sources(self):
         sources = {"monitors": [], "windows": []}
@@ -79,13 +103,8 @@ class ScreenCapture:
             # Convert to PIL Image
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
             
-            # Resize if it's too large to save tokens/bandwidth
-            orig_width, orig_height = img.size
-            max_size = (1920, 1080)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            thumb_width, thumb_height = img.size
-            # Scale factor: how much to multiply image coords to get original coords
-            scale = orig_width / thumb_width if thumb_width != orig_width else 1.0
+            # Normalize to a consistent resolution for the LLM
+            img, scale_x, scale_y = self._normalize(img)
             
             # Convert to base64
             buffered = io.BytesIO()
@@ -97,7 +116,8 @@ class ScreenCapture:
                 "pil_image": img,
                 "offset_x": offset_x,
                 "offset_y": offset_y,
-                "scale": scale,
+                "scale_x": scale_x,
+                "scale_y": scale_y,
             }
 
     def capture_fresh(self, target_type: str, target_name: str) -> Image.Image:
@@ -126,8 +146,7 @@ class ScreenCapture:
 
             screenshot = sct.grab(monitor_dict)
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
-            max_size = (1920, 1080)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            img, _, _ = self._normalize(img)
             return img
 
     def capture_phash(self, target_type: str, target_name: str) -> int:

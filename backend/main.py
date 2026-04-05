@@ -41,6 +41,8 @@ class StartRequest(BaseModel):
     instructions: str
     provider: str = "gemini_cli"
     role: str = "gamer"
+    use_grounding: bool = False
+    grounding_model: str = ""
 
 class InstructionUpdate(BaseModel):
     instructions: str
@@ -113,7 +115,9 @@ async def start_agent(req: StartRequest):
         game_instructions=req.instructions,
         emit_log=broadcast_log,
         provider=req.provider,
-        role=req.role
+        role=req.role,
+        use_grounding=req.use_grounding,
+        grounding_model=req.grounding_model
     )
     return {"status": "success" if success else "error", "message": msg}
 
@@ -135,6 +139,33 @@ async def abort_agent():
 @app.get("/api/status")
 def get_status():
     return {"is_running": agent.is_running, "is_paused": agent.is_paused}
+
+@app.get("/api/session")
+def get_session():
+    """Check if a resumable session exists from a prior crash."""
+    state = agent.session_state.load()
+    if state and not agent.is_running:
+        return {"resumable": True, "session": state}
+    return {"resumable": False}
+
+@app.post("/api/session/clear")
+def clear_session():
+    agent.session_state.clear()
+    return {"status": "success"}
+
+@app.get("/api/recipes")
+def list_recipes():
+    return {"recipes": agent.recipes.list_all()}
+
+@app.post("/api/recipes/{index}/toggle")
+def toggle_recipe(index: int, enabled: bool = True):
+    ok = agent.recipes.toggle(index, enabled)
+    return {"status": "success" if ok else "error"}
+
+@app.delete("/api/recipes/{index}")
+def delete_recipe(index: int):
+    ok = agent.recipes.delete(index)
+    return {"status": "success" if ok else "error"}
 
 # ── Gemini CLI fallback model list (no API key needed) ──
 GEMINI_CLI_MODELS = [

@@ -123,10 +123,11 @@ class InputController:
     def __init__(self):
         pydirectinput.PAUSE = 0.02
         
-    def _translate(self, x: int, y: int, offset_x: int, offset_y: int, scale: float) -> tuple:
+    def _translate(self, x: int, y: int, offset_x: int, offset_y: int,
+                   scale_x: float = 1.0, scale_y: float = 1.0) -> tuple:
         """Translate image-space coords to absolute screen coords."""
-        abs_x = int(x * scale) + offset_x
-        abs_y = int(y * scale) + offset_y
+        abs_x = int(x * scale_x) + offset_x
+        abs_y = int(y * scale_y) + offset_y
         return abs_x, abs_y
 
     def _drag(self, x1, y1, x2, y2, settle_s: float = 0.5):
@@ -161,7 +162,8 @@ class InputController:
         # 5. Release button — play the card
         _send_button(MOUSEEVENTF_LEFTUP)
 
-    def execute_action(self, action_string: str, offset_x: int = 0, offset_y: int = 0, scale: float = 1.0, settle_s: float = 0.5):
+    def execute_action(self, action_string: str, offset_x: int = 0, offset_y: int = 0,
+                       scale_x: float = 1.0, scale_y: float = 1.0, settle_s: float = 0.5):
         """
         Executes a single command parsed from the LLM.
         All mouse operations use SendInput + SetCursorPos for consistency.
@@ -173,37 +175,37 @@ class InputController:
         
         try:
             if cmd == "click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
             elif cmd == "right_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  right_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _click_at(x, y, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
             elif cmd == "middle_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  middle_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _click_at(x, y, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)
             elif cmd == "double_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  double_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
                 time.sleep(0.05)
                 _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
             elif cmd == "drag" and len(parts) >= 5:
-                x1, y1 = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
-                x2, y2 = self._translate(int(parts[3]), int(parts[4]), offset_x, offset_y, scale)
+                x1, y1 = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
+                x2, y2 = self._translate(int(parts[3]), int(parts[4]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  drag: img({parts[1]},{parts[2]})->({parts[3]},{parts[4]}) -> screen({x1},{y1})->({x2},{y2}) settle={settle_s:.2f}s")
                 self._drag(x1, y1, x2, y2, settle_s=settle_s)
             elif cmd == "scroll" and len(parts) >= 4:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 amount = int(parts[3])
                 print(f"  scroll: img({parts[1]},{parts[2]}) amount={amount} -> screen({x},{y})")
                 _move_to(x, y)
                 time.sleep(0.05)
                 _send_button(MOUSEEVENTF_WHEEL, mouse_data=amount * WHEEL_DELTA)
             elif cmd == "hover" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale)
+                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 print(f"  hover: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _move_to(x, y)
             elif cmd == "press" and len(parts) >= 2:
