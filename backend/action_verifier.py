@@ -232,8 +232,29 @@ def _rebuild_action(action_str: str, new_coords: List[Tuple[int, int]]) -> str:
 class ActionVerifier:
     """Verifies and adjusts action coordinates using local template matching."""
 
+    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit"]
+
     def __init__(self):
         self.last_adjustments: List[dict] = []  # log of recent adjustments
+
+    def check_action_risk(self, action_str: str, image: Image.Image) -> Tuple[bool, str]:
+        """Check if the action targets a high-risk UI element.
+        Uses OCR on the target coordinates to find risky keywords.
+        Returns (is_risky, keyword_found).
+        """
+        if not _TESSERACT_AVAILABLE:
+            return False, ""
+
+        coords = _parse_coords(action_str)
+        for cx, cy in coords:
+            text = _ocr_region_text(image, cx, cy)
+            # Ensure text is lowercase for case-insensitive matching,
+            # even though _ocr_region_text currently lowers it.
+            text_lower = text.lower()
+            for kw in self.HIGH_RISK_KEYWORDS:
+                if kw.lower() in text_lower:
+                    return True, kw
+        return False, ""
 
     def verify_and_adjust(self, action_str: str,
                           reference_pil: Image.Image,

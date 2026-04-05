@@ -333,6 +333,8 @@ class AgentLoop:
                         max_retries = MAX_RETRIES_KEY
                     else:
                         max_retries = MAX_RETRIES_CLICK
+
+                    action_approved = False
                     for attempt in range(max_retries + 1):
                         if not self.is_running:
                             break
@@ -352,6 +354,23 @@ class AgentLoop:
                             adj_log = self.verifier.format_adjustment_log(adjustments)
                             await _console_log(f"  [vision] attempt {attempt}\n{adj_log}")
                             exec_log.log_vision(attempt, adj_log)
+
+                        # ── High-risk classification ──
+                        if not action_approved:
+                            is_risky, keyword = await asyncio.to_thread(
+                                self.verifier.check_action_risk, adjusted_cmd, fresh_pil)
+                            if is_risky:
+                                await emit_log(f"REQUIRES_APPROVAL: High-risk keyword '{keyword}' detected. Please approve to execute: {adjusted_cmd}")
+                                await _console_log(f"  [!] High-risk keyword '{keyword}' detected. Pausing for approval.")
+                                self.is_paused = True
+                                self._resume_event = asyncio.Event()
+                                await self._resume_event.wait()
+                                self._resume_event = None
+                                if not self.is_running:
+                                    break
+                                action_approved = True
+                                await _console_log("  [+] Action approved by user.")
+                                await emit_log("STATUS: Action approved — continuing...")
 
                         attempt_label = f" (retry {attempt})" if attempt > 0 else ""
                         exec_label = adjusted_cmd if adjusted_cmd != cmd else cmd
