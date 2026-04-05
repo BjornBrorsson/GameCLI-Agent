@@ -11,15 +11,20 @@ env/
 
 # Environment & secrets
 .env
+*.env
+*.map
 
 # Temp / scratch files
 .tmp/
 backend/.tmp/
 *.tmp
 
-# Runtime data (logs, session narration)
+# Runtime data (logs, session narration, experience, recipes, session state)
 backend/Logs/
 backend/Narration/
+backend/Experience/
+backend/Recipes/
+backend/.session_state.json
 
 # Personal scratch files
 *.log
@@ -32,6 +37,7 @@ test_p_multi.txt
 test_prompt.txt
 gemini_help.txt
 img.png
+ActivePlan.md
 
 # User-specific game instructions (template is tracked)
 Game Instructions.md

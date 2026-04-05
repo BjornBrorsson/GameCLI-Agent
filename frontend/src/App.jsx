@@ -27,6 +27,8 @@ function App() {
   const [targetName, setTargetName] = useState('Monitor 1');
   const [instructions, setInstructions] = useState('');
   const [role, setRole] = useState('gamer');
+  const [useGrounding, setUseGrounding] = useState(false);
+  const [groundingModel, setGroundingModel] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -49,6 +51,7 @@ function App() {
     checkStatus();
     connectWebSocket();
     fetchMacros();
+    checkResumableSession();
 
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -109,7 +112,9 @@ function App() {
           const res = await fetch('http://localhost:8000/api/cost');
           const data = await res.json();
           setSessionCost(data);
-        } catch (e) {}
+        } catch (e) {
+          console.error('Failed to fetch cost', e);
+        }
       };
       fetchCost();
       costIntervalRef.current = setInterval(fetchCost, 5000);
@@ -179,6 +184,34 @@ function App() {
     }
   };
 
+  const checkResumableSession = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/session');
+      const data = await res.json();
+      if (data.resumable && data.session) {
+        const s = data.session;
+        const age = Math.round((Date.now() / 1000 - s.saved_at) / 60);
+        const resume = window.confirm(
+          `A previous session was interrupted ${age} minute(s) ago.\n\n` +
+          `Target: ${s.target_name}\nModel: ${s.model_name}\nRole: ${s.role}\nStep: ${s.step}\n\n` +
+          `Restore settings and continue?`
+        );
+        if (resume) {
+          setTargetType(s.target_type);
+          setTargetName(s.target_name);
+          setSelectedModel(s.model_name);
+          setRole(s.role);
+          setInstructions(s.game_instructions);
+          setProvider(s.provider || 'gemini_cli');
+          setUseGrounding(s.use_grounding || false);
+          setGroundingModel(s.grounding_model || '');
+        } else {
+          await fetch('http://localhost:8000/api/session/clear', { method: 'POST' });
+        }
+      }
+    } catch (e) {}
+  };
+
   const checkStatus = async () => {
     try {
       const res = await fetch('http://localhost:8000/api/status');
@@ -186,7 +219,9 @@ function App() {
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
       setIsRecordingMacro(data.is_recording_macro || false);
-    } catch (e) {}
+    } catch (e) {
+      console.error('Failed to check status', e);
+    }
   };
 
   const fetchMacros = async () => {
@@ -284,7 +319,9 @@ function App() {
           model_name: modelToUse,
           instructions: instructions,
           provider: provider,
-          role: role
+          role: role,
+          use_grounding: useGrounding,
+          grounding_model: groundingModel
         })
       });
       
@@ -482,6 +519,24 @@ function App() {
               <select value={role} onChange={e => setRole(e.target.value)}>
                 {ROLES.map(r => <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>)}
               </select>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={useGrounding} onChange={e => setUseGrounding(e.target.checked)} />
+                Visual Grounding
+                <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(UI element detection — extra LLM call per step, improves click accuracy)</span>
+              </label>
+
+              {useGrounding && (
+                <>
+                  <label>Grounding Model <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(leave blank to use main model)</span></label>
+                  <input
+                    type="text"
+                    value={groundingModel}
+                    onChange={e => setGroundingModel(e.target.value)}
+                    placeholder="e.g. gemini-2.0-flash (fast/cheap)"
+                  />
+                </>
+              )}
 
               <label>Game Instructions (Markdown)</label>
               <textarea 
