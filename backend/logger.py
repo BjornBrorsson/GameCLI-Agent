@@ -30,8 +30,8 @@ class SessionLogger:
                 f.write("- None\n")
             else:
                 for action in actions:
-                    if isinstance(action, tuple) and len(action) == 2:
-                        cmd, reason = action
+                    if isinstance(action, tuple) and len(action) >= 2:
+                        cmd, reason = action[0], action[1]
                         if reason:
                             f.write(f"- `{cmd}` — {reason}\n")
                         else:
@@ -141,6 +141,29 @@ class ExecutionLogger:
 
     def log_abort(self):
         self.log(f"*** ABORTED by user ***")
+
+    def get_filename(self):
+        return self.filename
+
+
+class ConsoleLogger:
+    """Mirrors all backend console output to a per-session log file
+    under Logs/Console_<timestamp>.log."""
+
+    def __init__(self, log_dir: str = "Logs"):
+        self.log_dir = log_dir
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.filename = os.path.join(self.log_dir, f"Console_{timestamp}.log")
+        with open(self.filename, "w", encoding="utf-8") as f:
+            f.write(f"=== Console Log — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+
+    def log(self, message: str):
+        """Append a line to the console log file."""
+        with open(self.filename, "a", encoding="utf-8") as f:
+            f.write(f"{message}\n")
 
     def get_filename(self):
         return self.filename

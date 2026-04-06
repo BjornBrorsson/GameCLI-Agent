@@ -38,6 +38,9 @@ function App() {
   const [isRecordingMacro, setIsRecordingMacro] = useState(false);
   const [macroNameInput, setMacroNameInput] = useState('');
   const [macrosList, setMacrosList] = useState([]);
+  const [visionStatus, setVisionStatus] = useState('Idle');
+  const [currentAction, setCurrentAction] = useState(null);
+  const [isAwaitingApproval, setIsAwaitingApproval] = useState(false);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -273,20 +276,62 @@ function App() {
   const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
-      const msg = event.data;
-      // Strip timestamp prefix for classification
+      const raw = event.data;
+      // Try to parse as JSON (backend sends JSON objects)
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch (_) { /* plain text fallback */ }
+
+      if (parsed && typeof parsed === 'object') {
+        const evtType = (parsed.type || '').toUpperCase();
+        const msg = `[${parsed.timestamp || ''}] ${evtType}: ${parsed.message || ''}`;
+
+        // Detect PAUSED state
+        if (evtType === 'PAUSED') {
+          setIsPaused(true);
+        }
+        if (evtType === 'STATUS' && (parsed.message || '').includes('resumed')) {
+          setIsPaused(false);
+        }
+
+        // Update vision status from event type
+        if (evtType === 'THINKING') {
+          setVisionStatus('Analyzing screen...');
+        } else if (evtType === 'EXECUTING') {
+          setVisionStatus(`Executing: ${parsed.command || ''}`);
+          setCurrentAction(parsed);
+        } else if (evtType === 'NARRATION') {
+          setVisionStatus(parsed.message || 'Processing...');
+        } else if (evtType === 'ERROR') {
+          setVisionStatus(`Error: ${parsed.message || ''}`);
+        } else if (evtType === 'REQUIRES_APPROVAL') {
+          setIsPaused(true);
+          setIsAwaitingApproval(true);
+          setVisionStatus(`Awaiting approval: ${parsed.message || ''}`);
+        }
+
+        // STATUS/THINKING messages go to browser console only
+        if (evtType === 'STATUS' || evtType === 'THINKING') {
+          console.log(msg);
+          if (evtType === 'THINKING') {
+            setLogs((prev) => [...prev, msg]);
+          }
+          return;
+        }
+        setLogs((prev) => [...prev, msg]);
+        return;
+      }
+
+      // Plain text fallback
+      const msg = raw;
       const stripped = msg.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
-      // Detect PAUSED state from backend
       if (stripped.startsWith('PAUSED:')) {
         setIsPaused(true);
       }
       if (stripped.startsWith('STATUS:') && stripped.includes('resumed')) {
         setIsPaused(false);
       }
-      // STATUS/THINKING messages go to browser console only
       if (stripped.startsWith('STATUS:') || stripped.startsWith('THINKING:')) {
         console.log(msg);
-        // Still add THINKING to logs as a subtle indicator
         if (stripped.startsWith('THINKING:')) {
           setLogs((prev) => [...prev, msg]);
         }

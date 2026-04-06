@@ -188,6 +188,63 @@ OR to skip:
 }}
 """
 
+LEAD_AGENT_PROMPT = """
+You are the Lead Agent — a strategic analyst for an autonomous game-playing system.
+
+{role_instructions}
+
+INPUT: A screenshot of the current game state with YELLOW COORDINATE RULERS on all four edges.
+OUTPUT: A concise strategic directive in plain text (NOT JSON).
+
+Your job is to:
+1. Describe what you see on screen (game phase, important UI elements, threats, opportunities).
+2. Decide on the best high-level strategy for this moment.
+3. Give a clear directive to the Worker Agent, including:
+   - What actions to take and in what order
+   - Which screen elements to interact with (describe their approximate position)
+   - Any keyboard shortcuts to prefer
+   - Warnings about risks or things to avoid
+
+Keep your directive concise (3-6 sentences). Focus on WHAT to do, not HOW to format it.
+"""
+
+WORKER_AGENT_PROMPT = """
+You are the Worker Agent — a precise input-command generator for an autonomous game-playing system.
+
+INPUT: A screenshot with YELLOW COORDINATE RULERS on all edges, plus a strategic directive from the Lead Agent.
+OUTPUT: JSON only. No markdown, no backticks, no text outside the JSON.
+
+FORMAT:
+{
+  "narration": "Brief description of what you're doing and why.",
+  "actions": [
+    {"command": "press enter", "reason": "Confirm selection"},
+    {"command": "click 750 400", "reason": "Click the target element"}
+  ]
+}
+
+COMMANDS (prefer keyboard over mouse when possible):
+- press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc).
+- hold_key / release_key key — modifier hold/release (shift, ctrl, alt). Always pair them.
+- type text — type a string character by character.
+- click / right_click / middle_click / double_click x y — use when no keyboard shortcut exists.
+- drag x1 y1 x2 y2 — click-hold, move, release.
+- scroll x y amount — mouse wheel (positive=up, negative=down).
+- hover x y — move cursor without clicking.
+- wait seconds — pause (decimal ok). ONLY when the game needs time.
+- run_macro macro_name — run a pre-recorded sequence.
+
+COORDINATE PRECISION:
+- The screenshot is always 1280x720 pixels.
+- Use the yellow rulers to measure the EXACT center of elements. Always cross-reference.
+
+RULES:
+- Return ONLY valid JSON.
+- Follow the Lead Agent's directive precisely.
+- Use keyboard shortcuts whenever possible.
+- Keep narration concise (2-4 sentences max).
+"""
+
 # ── Pricing per 1M tokens (input, output) in USD ──
 MODEL_PRICING = {
     "gemini-2.5-flash": (0.15, 0.60),
@@ -260,18 +317,31 @@ class LLMIntegration:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
 
+    @staticmethod
+    def _strip_thinking_tags(text: str) -> tuple:
+        """Extract and remove <thought>...</thought>, <thinking>...</thinking>,
+        and similar reasoning tags that some models emit before the actual content.
+        Returns (cleaned_text, thinking_text) so thinking can be logged separately."""
+        TAG_PATTERN = re.compile(
+            r'<(thought|thinking|reasoning|inner_monologue)>(.*?)</\1>',
+            flags=re.DOTALL)
+        thinking_parts = [m.group(2).strip() for m in TAG_PATTERN.finditer(text)]
+        cleaned = TAG_PATTERN.sub('', text).strip()
+        thinking = "\n".join(thinking_parts) if thinking_parts else ""
+        return cleaned, thinking
+
     # ── Routing ──
 
-    def _call(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Route to the configured provider."""
         if self.provider == "gemini_cli":
-            return self._call_gemini_cli(prompt_text, image_base64, model_name)
+            return self._call_gemini_cli(prompt_text, image_base64, model_name, expect_json=expect_json)
         else:
-            return self._call_api(prompt_text, image_base64, model_name)
+            return self._call_api(prompt_text, image_base64, model_name, expect_json=expect_json)
 
     # ── Gemini CLI (free, default) ──
 
-    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Call Gemini via the local CLI tool. Free but slower."""
         if not re.match(r'^[\w\-\.]+$', model_name):
             raise ValueError(f"Invalid model name format: {model_name}")
@@ -305,6 +375,12 @@ class LLMIntegration:
                 shell=True
             )
             content = result.stdout.strip()
+            content, thinking = self._strip_thinking_tags(content)
+            if thinking:
+                print(f"  [thinking] {thinking}")
+
+            if not expect_json:
+                return content
 
             # Clean up potential markdown wrappers
             clean_content = re.sub(r'```(?:json)?', '', content).strip()
@@ -326,7 +402,7 @@ class LLMIntegration:
 
     # ── API providers (Gemini API / OpenRouter) ──
 
-    def _call_api(self, prompt_text: str, image_base64: str, model_name: str):
+    def _call_api(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Call an OpenAI-compatible chat completions API.
         Works for both Gemini API and OpenRouter.
         """
@@ -397,11 +473,22 @@ class LLMIntegration:
 
         # Extract content
         content = data["choices"][0]["message"]["content"]
+        content, thinking = self._strip_thinking_tags(content)
+        if thinking:
+            print(f"  [thinking] {thinking}")
 
         # Track tokens / cost
         usage = data.get("usage", {})
         in_tok = usage.get("prompt_tokens", 0)
         out_tok = usage.get("completion_tokens", 0)
+
+        if not expect_json:
+            try:
+                self.cost.record(in_tok, out_tok, model_name)
+            except BudgetExceededException as e:
+                e.partial_result = content
+                raise
+            return content
 
         # Parse JSON from content first so we don't lose the result if budget is exceeded
         clean_content = re.sub(r'```(?:json)?', '', content).strip()
@@ -432,7 +519,8 @@ class LLMIntegration:
         return result_json
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview",
-                        role: str = "gamer", grounding_text: str = "", enabled_tools: list = None):
+                        role: str = "gamer", grounding_text: str = "", enabled_tools: list = None,
+                        step_history: str = ""):
         try:
             self.turn_count += 1
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
@@ -464,6 +552,9 @@ class LLMIntegration:
                 lead_full_prompt += f"\n{grounding_text}\n"
             if extra_commands:
                 lead_full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+            if step_history:
+                lead_full_prompt += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
+                lead_full_prompt += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
             if self.turn_count % 5 == 0:
                 lead_full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
             lead_full_prompt += "Please analyze the attached screenshot image and provide your strategic directive."
@@ -578,32 +669,37 @@ class LLMIntegration:
             print(f"[revalidate] Error: {e}")
             return None
 
-    def verify_action_success(self, after_base64: str, action_taken: str, model_name: str = "gemini-2.5-flash") -> bool:
+    def verify_action_success(self, after_base64: str, action_taken: str, model_name: str = "gemini-2.5-flash") -> tuple:
         """Lightweight check to see if the action actually changed the game state.
         Note: Passing a single 'after' image relies on the LLM deducing success from the
         current state alone to save context limits and ensure API compatibility.
+        Returns (did_succeed: bool, reason: str).
         """
         verify_prompt = """
-You are a meticulous verification agent checking if a specific action succeeded in a game.
-
-INPUT:
-You will be provided TWO screenshots side-by-side using the structure below (if your API supports multiple images) or instructed to analyze the latest state.
-You must determine if the specific action taken had a visible effect on the game state.
+You are a verification agent checking if a specific action succeeded in a game.
 
 ACTION TAKEN: {action_taken}
 
-OUTPUT:
-Respond ONLY with JSON matching this exactly:
+Look at the screenshot and determine if this action appears to have been executed.
+Be LENIENT — if the screen looks different from what you'd expect BEFORE the action
+(e.g. a card is gone from hand, a button state changed, an animation is playing),
+assume the action succeeded. Only return false if you are confident the game state
+is identical to before the action was attempted.
+
+Respond ONLY with JSON:
 {
   "did_succeed": true or false,
-  "reason": "Brief explanation of what changed or why it failed."
+  "reason": "Brief explanation."
 }
 """
         filled_prompt = verify_prompt.replace("{action_taken}", action_taken)
         prompt = f"SYSTEM: {filled_prompt}\nAnalyze the screenshot and determine if the action appears to have executed successfully."
         try:
             result = self._call(prompt, after_base64, model_name, expect_json=True)
-            return result.get("did_succeed", True)
+            succeeded = result.get("did_succeed", True)
+            reason = result.get("reason", "")
+            print(f"  [verify] did_succeed={succeeded}  reason={reason}")
+            return succeeded, reason
         except Exception as e:
             print(f"[verify] Verification failed (assuming success to avoid hard blocks): {e}")
-            return True
+            return True, "verification error — defaulting to success"

@@ -51,7 +51,11 @@ class InstructionUpdate(BaseModel):
     instructions: str
 
 # Helper to broadcast logs
-async def broadcast_log(event: dict):
+async def broadcast_log(event):
+    if isinstance(event, str):
+        # Convert plain string like "PAUSED: msg" or "STATUS: msg" into a dict
+        parts = event.split(": ", 1)
+        event = {"type": parts[0].lower(), "message": parts[1] if len(parts) > 1 else event}
     if "timestamp" not in event:
         event["timestamp"] = datetime.now().strftime("%H:%M:%S")
     stamped = f"[{event['timestamp']}] {event.get('type', 'log').upper()}: {event.get('message', '')}"

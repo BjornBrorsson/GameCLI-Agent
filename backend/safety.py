@@ -56,7 +56,7 @@ class SafetyFilter:
         self.config = config or SafetyConfig()
         self._last_action_time: float = 0.0
         self._blocked_reason_patterns = [
-            re.compile(re.escape(p), re.IGNORECASE) for p in self.config.blocked_reasons
+            re.compile(r'\b' + re.escape(p) + r'\b', re.IGNORECASE) for p in self.config.blocked_reasons
         ]
         self._blocked_cmd_patterns = [
             re.compile(p, re.IGNORECASE) for p in self.config.blocked_command_patterns

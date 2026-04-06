@@ -11,7 +11,7 @@ from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOW
 from action_verifier import ActionVerifier
 from game_state import detect_phase, PHASE_TOOLS
 from llm import LLMIntegration, BudgetExceededException
-from logger import SessionLogger, ExecutionLogger
+from logger import SessionLogger, ExecutionLogger, ConsoleLogger
 from safety import SafetyFilter
 from grounding import LLMGrounding
 from experience_store import ExperienceStore
@@ -149,10 +149,13 @@ class AgentLoop:
                      provider: str = "gemini_cli", role: str = "gamer", use_grounding: bool = False,
                      grounding_model: str = "", max_budget_usd: float = 0.0):
         # emit_log sends to WebSocket (user-facing)
-        # _console_log sends to backend console only
+        # _console_log sends to backend console AND per-session log file
+        console_log = ConsoleLogger()
         async def _console_log(msg):
             ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts}] {msg}")
+            line = f"[{ts}] {msg}"
+            print(line)
+            console_log.log(line)
 
         await _console_log("Agent initialized. Starting session logger...")
         
@@ -174,11 +177,14 @@ class AgentLoop:
             
         logger = SessionLogger()
         exec_log = ExecutionLogger()
+        await _console_log(f"Console log: {console_log.get_filename()}")
         await _console_log(f"Narration log: {logger.get_filename()}")
         await _console_log(f"Execution log: {exec_log.get_filename()}")
         
         step = 1
         consecutive_errors = 0
+        STEP_HISTORY_MAX = 5  # keep last N step summaries for LLM context
+        step_history = []     # list of short summary strings
         
         async def _handle_budget_call(coro):
             """Helper to run an LLM call and cleanly handle budget exceptions."""
@@ -281,8 +287,9 @@ class AgentLoop:
                     await _console_log(f"  [tools] Detected phase '{current_phase}' — limiting to {len(active_tools)} tools")
 
                     # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
+                    history_text = "\n".join(step_history) if step_history else ""
                     response, should_continue = await _handle_budget_call(
-                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools)
+                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools, step_history=history_text)
                     )
                     if not should_continue:
                         break
@@ -308,7 +315,7 @@ class AgentLoop:
                 
                 # Send narration to user-facing telemetry
                 await emit_log(f"NARRATION: {narration}")
-                for cmd, reason in parsed_actions:
+                for cmd, reason, *_ in parsed_actions:
                     label = f"{cmd}" + (f"  —  {reason}" if reason else "")
                     await emit_log(f"ACTION: {label}")
                 
@@ -323,7 +330,7 @@ class AgentLoop:
                 await asyncio.to_thread(self._focus_window, target_type, target_name)
 
                 MAX_RETRIES_CLICK = 8   # clicks either work quickly or the action is invalid
-                MAX_RETRIES_DRAG  = 20  # drags are finicky (items snap back, targets missed)
+                MAX_RETRIES_DRAG  = 10  # drags are finicky but 20 was excessive (4+ min wasted)
                 MAX_RETRIES_KEY   = 3   # keyboard actions: no coords to fix, retry is blind
                 LLM_ASSIST_AFTER  = 4   # ask LLM for help after this many failed attempts
                 failed_actions = 0
@@ -531,14 +538,20 @@ class AgentLoop:
 
                         if changed:
                             # ── Verify Agent Sub-role ──
-                            if role == "gamer" and getattr(self, 'llm', None):
+                            # Only verify on first 2 attempts — after that, trust pixel diff.
+                            # Each verify is an extra LLM round-trip; on retries the screen
+                            # is more likely to show transient animations that confuse the verifier.
+                            VERIFY_MAX_ATTEMPT = 1
+                            if (role == "gamer" and getattr(self, 'llm', None)
+                                    and attempt <= VERIFY_MAX_ATTEMPT):
                                 await _console_log("  [verify] Asking Verify Agent if game state progressed...")
                                 after_b64 = self.screen_capture.pil_to_base64(after_pil)
-                                verified = await asyncio.to_thread(self.llm.verify_action_success, after_b64, exec_label)
+                                verified, verify_reason = await asyncio.to_thread(
+                                    self.llm.verify_action_success, after_b64, exec_label, model_name)
                                 if not verified:
                                     changed = False
-                                    await _console_log("  [!] Screen changed visually, but Verify Agent ruled action failed.")
-                                    exec_log.log("  [verify] Failed: LLM says no progression.")
+                                    await _console_log(f"  [!] Screen changed visually, but Verify Agent ruled action failed. Reason: {verify_reason}")
+                                    exec_log.log(f"  [verify] Failed: {verify_reason}")
 
                         if changed:
                             await _console_log(f"  ✓ Action {action_index+1} succeeded on attempt {attempt}")
@@ -810,6 +823,20 @@ class AgentLoop:
                         exec_log.log_resume()
                         await _console_log("Agent resumed by user.")
                         await emit_log("STATUS: Agent resumed — continuing...")
+
+                # ── Step history for LLM context ──
+                action_summaries = []
+                for i, (c, r, *_rest) in enumerate(parsed_actions):
+                    status = "OK" if (i < len(attempt_counts) and attempt_counts[i] == 1) else "FAILED/RETRIED"
+                    action_summaries.append(f"  {c}" + (f" ({r})" if r else "") + f" → {status}")
+                outcome = "screen changed" if overall_changed else "NO EFFECT"
+                history_entry = (
+                    f"Step {step}: {outcome}\n"
+                    + "\n".join(action_summaries)
+                )
+                step_history.append(history_entry)
+                if len(step_history) > STEP_HISTORY_MAX:
+                    step_history = step_history[-STEP_HISTORY_MAX:]
 
                 # ── Session state checkpoint ──
                 self.session_state.save(
