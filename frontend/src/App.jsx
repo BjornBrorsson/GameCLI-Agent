@@ -17,6 +17,7 @@ const ROLES = [
 function App() {
   const [provider, setProvider] = useState('gemini_cli');
   const [apiKey, setApiKey] = useState('');
+  const [secondaryApiKey, setSecondaryApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
   const [customModel, setCustomModel] = useState('');
   const [availableModels, setAvailableModels] = useState([]);  // [{id, name}]
@@ -41,6 +42,9 @@ function App() {
   const [visionStatus, setVisionStatus] = useState('Idle');
   const [currentAction, setCurrentAction] = useState(null);
   const [isAwaitingApproval, setIsAwaitingApproval] = useState(false);
+  const [memories, setMemories] = useState([]);
+  const [memoryDraft, setMemoryDraft] = useState({ content: '', game: '', tags: '' });
+  const [editingMemoryId, setEditingMemoryId] = useState(null);
   
   const wsRef = useRef(null);
   const logsEndRef = useRef(null);
@@ -54,6 +58,7 @@ function App() {
     checkStatus();
     connectWebSocket();
     fetchMacros();
+    fetchMemories();
     checkResumableSession();
 
     return () => {
@@ -273,6 +278,92 @@ function App() {
     }
   };
 
+  const fetchMemories = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/memories');
+      const data = await res.json();
+      setMemories(data.memories || []);
+    } catch (e) {
+      console.error("Failed to fetch memories", e);
+    }
+  };
+
+  const handleAddMemory = async () => {
+    if (!memoryDraft.content.trim()) return;
+    try {
+      const res = await fetch('http://localhost:8000/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: memoryDraft.content.trim(),
+          game: memoryDraft.game.trim(),
+          tags: memoryDraft.tags ? memoryDraft.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+          source: 'user'
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setMemoryDraft({ content: '', game: '', tags: '' });
+        fetchMemories();
+      }
+    } catch (e) {
+      console.error("Failed to add memory", e);
+    }
+  };
+
+  const handleUpdateMemory = async (id) => {
+    if (!memoryDraft.content.trim()) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/memories/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: memoryDraft.content.trim(),
+          game: memoryDraft.game.trim(),
+          tags: memoryDraft.tags ? memoryDraft.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setMemoryDraft({ content: '', game: '', tags: '' });
+        setEditingMemoryId(null);
+        fetchMemories();
+      }
+    } catch (e) {
+      console.error("Failed to update memory", e);
+    }
+  };
+
+  const handleDeleteMemory = async (id) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/memories/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        if (editingMemoryId === id) {
+          setEditingMemoryId(null);
+          setMemoryDraft({ content: '', game: '', tags: '' });
+        }
+        fetchMemories();
+      }
+    } catch (e) {
+      console.error("Failed to delete memory", e);
+    }
+  };
+
+  const startEditMemory = (m) => {
+    setEditingMemoryId(m.id);
+    setMemoryDraft({
+      content: m.content,
+      game: m.game || '',
+      tags: (m.tags || []).join(', ')
+    });
+  };
+
+  const cancelEditMemory = () => {
+    setEditingMemoryId(null);
+    setMemoryDraft({ content: '', game: '', tags: '' });
+  };
+
   const connectWebSocket = () => {
     const ws = new WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
@@ -359,6 +450,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: apiKey || "local-cli",
+          secondary_api_key: secondaryApiKey || "",
           target_type: targetType,
           target_name: targetName,
           model_name: modelToUse,
@@ -495,13 +587,21 @@ function App() {
 
               {providerInfo?.needsKey && (
                 <>
-                  <label>API Key</label>
+                  <label>API Key (primary)</label>
                   <input
                     type="password"
                     autoComplete="off"
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
                     placeholder={provider === 'openrouter' ? 'sk-or-...' : 'AIza...'}
+                  />
+                  <label>API Key (secondary / fallback) <span style={{fontSize:'0.7rem', color:'var(--text-secondary)', fontWeight:'normal'}}>optional — used when primary hits rate limit</span></label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={secondaryApiKey}
+                    onChange={e => setSecondaryApiKey(e.target.value)}
+                    placeholder="Paid-tier key (fallback)"
                   />
                 </>
               )}
@@ -664,6 +764,94 @@ function App() {
                 <ul style={{ margin: 0, paddingLeft: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   {macrosList.map((m, i) => <li key={i}>{m}</li>)}
                 </ul>
+              )}
+            </div>
+
+            {/* ── Agent Memories ── */}
+            <div className="card">
+              <h2>Agent Memories</h2>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.75rem' }}>
+                Persistent knowledge the agent remembers across sessions — hotkeys, strategies, game-specific tips.
+              </p>
+
+              {/* Add / Edit form */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                <textarea
+                  value={memoryDraft.content}
+                  onChange={e => setMemoryDraft(d => ({ ...d, content: e.target.value }))}
+                  placeholder="e.g. In Slay The Spire, press 1-9 to select cards in hand. Press E to end turn."
+                  style={{ minHeight: '60px', resize: 'vertical' }}
+                />
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <input
+                    type="text"
+                    value={memoryDraft.game}
+                    onChange={e => setMemoryDraft(d => ({ ...d, game: e.target.value }))}
+                    placeholder="Game (optional)"
+                    style={{ flex: 1 }}
+                  />
+                  <input
+                    type="text"
+                    value={memoryDraft.tags}
+                    onChange={e => setMemoryDraft(d => ({ ...d, tags: e.target.value }))}
+                    placeholder="Tags (comma-separated)"
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  {editingMemoryId ? (
+                    <>
+                      <button
+                        onClick={() => handleUpdateMemory(editingMemoryId)}
+                        style={{ flex: 1, background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '6px', padding: '0.4rem', cursor: 'pointer', fontWeight: 'bold' }}
+                      >
+                        Save Changes
+                      </button>
+                      <button
+                        onClick={cancelEditMemory}
+                        style={{ background: 'var(--surface)', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.4rem 0.75rem', cursor: 'pointer' }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={handleAddMemory}
+                      disabled={!memoryDraft.content.trim()}
+                      style={{ flex: 1, background: 'var(--success)', color: 'white', border: 'none', borderRadius: '6px', padding: '0.4rem', cursor: 'pointer', fontWeight: 'bold', opacity: memoryDraft.content.trim() ? 1 : 0.5 }}
+                    >
+                      + Add Memory
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Memory list */}
+              {memories.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No memories yet. Add game-specific knowledge above.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '300px', overflowY: 'auto' }}>
+                  {memories.map(m => (
+                    <div key={m.id} style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      padding: '0.5rem 0.65rem',
+                      fontSize: '0.82rem',
+                    }}>
+                      <div style={{ marginBottom: '0.25rem' }}>{m.content}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {m.game && <span style={{ background: '#1e40af', color: '#93c5fd', borderRadius: '4px', padding: '1px 6px', fontSize: '0.7rem' }}>{m.game}</span>}
+                        {(m.tags || []).map((t, i) => (
+                          <span key={i} style={{ background: '#374151', color: '#9ca3af', borderRadius: '4px', padding: '1px 6px', fontSize: '0.7rem' }}>{t}</span>
+                        ))}
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>{m.source === 'agent' ? 'AI' : 'User'}</span>
+                        <button onClick={() => startEditMemory(m)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem', padding: '0' }}>Edit</button>
+                        <button onClick={() => handleDeleteMemory(m.id)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '0.75rem', padding: '0' }}>Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

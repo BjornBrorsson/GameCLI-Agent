@@ -17,6 +17,7 @@ from grounding import LLMGrounding
 from experience_store import ExperienceStore
 from recipes import RecipeStore
 from session_state import SessionState
+from memories import MemoryStore
 
 # Struggle thresholds — pause agent if actions are taking too many retries
 # Average attempts > this means the agent is struggling (1.0 = every action first-try)
@@ -39,6 +40,7 @@ class AgentLoop:
         self.experience = ExperienceStore()
         self.recipes = RecipeStore()
         self.session_state = SessionState()
+        self.memories = MemoryStore()
 
     def resume(self):
         """Resume the agent after a pause."""
@@ -93,13 +95,14 @@ class AgentLoop:
         
     def start(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
                provider: str = "gemini_cli", role: str = "gamer", use_grounding: bool = False,
-               grounding_model: str = "", max_budget_usd: float = 0.0):
+               grounding_model: str = "", max_budget_usd: float = 0.0,
+               secondary_api_key: str = ""):
         if self.is_running:
             return False, "Agent is already running."
             
         self.is_running = True
         self.llm = None  # will be set in _loop; exposed for cost tracking
-        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role, use_grounding, grounding_model, max_budget_usd))
+        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role, use_grounding, grounding_model, max_budget_usd, secondary_api_key))
         return True, "Agent started."
         
     def stop(self):
@@ -147,7 +150,8 @@ class AgentLoop:
 
     async def _loop(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
                      provider: str = "gemini_cli", role: str = "gamer", use_grounding: bool = False,
-                     grounding_model: str = "", max_budget_usd: float = 0.0):
+                     grounding_model: str = "", max_budget_usd: float = 0.0,
+                     secondary_api_key: str = ""):
         # emit_log sends to WebSocket (user-facing)
         # _console_log sends to backend console AND per-session log file
         console_log = ConsoleLogger()
@@ -160,7 +164,9 @@ class AgentLoop:
         await _console_log("Agent initialized. Starting session logger...")
         
         try:
-            llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None, max_budget_usd=max_budget_usd)
+            llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None,
+                                 secondary_api_key=secondary_api_key if provider != "gemini_cli" else None,
+                                 max_budget_usd=max_budget_usd)
             self.llm = llm  # expose for cost tracking
         except Exception as e:
             await emit_log(f"ERROR: Failed to initialize LLM Integration: {e}")
@@ -288,8 +294,9 @@ class AgentLoop:
 
                     # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
                     history_text = "\n".join(step_history) if step_history else ""
+                    memories_text = self.memories.format_for_prompt(game=game_instructions[:60])
                     response, should_continue = await _handle_budget_call(
-                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools, step_history=history_text)
+                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools, step_history=history_text, memories_text=memories_text)
                     )
                     if not should_continue:
                         break
@@ -303,8 +310,8 @@ class AgentLoop:
                 if not raw_actions and ("error" in narration.lower() or "Error" in narration):
                     consecutive_errors += 1
                     cooldown = min(consecutive_errors * 5, 30)  # 5s, 10s, 15s... up to 30s
-                    await emit_log(f"ERROR: LLM returned error ({consecutive_errors} in a row). Cooling down {cooldown}s...")
-                    await _console_log(f"  [!] LLM error #{consecutive_errors}, cooldown {cooldown}s")
+                    await emit_log(f"ERROR: {narration} (#{consecutive_errors}, cooling down {cooldown}s)")
+                    await _console_log(f"  [!] LLM error #{consecutive_errors}: {narration[:200]}, cooldown {cooldown}s")
                     await asyncio.sleep(cooldown)
                     step += 1
                     continue
@@ -329,10 +336,9 @@ class AgentLoop:
                 # Re-focus game window before executing (focus drifts during LLM call)
                 await asyncio.to_thread(self._focus_window, target_type, target_name)
 
-                MAX_RETRIES_CLICK = 8   # clicks either work quickly or the action is invalid
-                MAX_RETRIES_DRAG  = 10  # drags are finicky but 20 was excessive (4+ min wasted)
-                MAX_RETRIES_KEY   = 3   # keyboard actions: no coords to fix, retry is blind
-                LLM_ASSIST_AFTER  = 4   # ask LLM for help after this many failed attempts
+                MAX_RETRIES_CLICK = 5   # 5 nudge attempts; if target isn't found, re-plan
+                MAX_RETRIES_DRAG  = 7   # drags are finicky but cap waste at ~30s
+                LLM_ASSIST_AFTER  = 3   # ask LLM for help sooner to avoid blind retries
                 failed_actions = 0
                 total_actions = 0
                 attempt_counts = []  # per-action attempt counts for struggle detection
@@ -381,6 +387,24 @@ class AgentLoop:
                         await emit_log(f"STATUS: Objective updated to: {objective_text}")
                         action_index += 1
                         continue
+
+                    # ── Save Memory ──
+                    if cmd.startswith("save_memory"):
+                        memory_text = cmd.replace("save_memory", "").strip()
+                        if memory_text:
+                            self.memories.add(content=memory_text, game="", tags=["agent-discovered"], source="agent")
+                            await _console_log(f"  [memory] Saved: {memory_text}")
+                            await emit_log(f"STATUS: Memory saved — {memory_text}")
+                        action_index += 1
+                        continue
+
+                    # ── Coordinate clamping (fix OOB instead of blocking) ──
+                    cmd, was_clamped, clamp_detail = self.safety.clamp_coordinates(cmd)
+                    if was_clamped:
+                        await _console_log(f"  [safety] Clamped OOB coords: {clamp_detail} -> {cmd}")
+                        exec_log.log(f"  [safety] Clamped OOB coords: {clamp_detail} -> {cmd}")
+                        # Update the parsed action tuple so downstream code sees clamped cmd
+                        parsed_actions[action_index] = (cmd, reason, *parsed_actions[action_index][2:])
 
                     # ── Safety check ──
                     safe, block_reason = self.safety.check(cmd, reason)
@@ -433,10 +457,26 @@ class AgentLoop:
                         after_pil = await asyncio.to_thread(self.screen_capture.capture_fresh, target_type, target_name)
                         continue
 
+                    # ── Fast-path: keyboard actions ──
+                    # Keyboard presses have no coordinates to verify or nudge.
+                    # Execute immediately and move on — like the Cascade model:
+                    # do the action, check results at the end of the batch.
+                    if is_keyboard:
+                        exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale_x)
+                        await _console_log(f"  [exec] {cmd}" + (f"  —  {reason}" if reason else ""))
+                        await emit_log({"type": "executing", "command": cmd, "reason": reason, "attempt": 0, "max_retries": 0, "message": f"{cmd}" + (f"  —  {reason}" if reason else "")})
+                        self.input_controller.execute_action(cmd, offset_x, offset_y, scale_x, scale_y)
+                        await asyncio.sleep(0.3)  # brief pause for game to register
+                        exec_log.log_result(0, True, True)
+                        await _console_log(f"  ✓ Key action completed")
+                        total_actions += 1
+                        attempt_counts.append(1)
+                        exec_log.log_action_outcome(action_index + 1, True, 1)
+                        action_index += 1
+                        continue
+
                     if is_drag:
                         max_retries = MAX_RETRIES_DRAG
-                    elif is_keyboard:
-                        max_retries = MAX_RETRIES_KEY
                     else:
                         max_retries = MAX_RETRIES_CLICK
 
@@ -503,19 +543,19 @@ class AgentLoop:
                             adjusted_cmd, offset_x, offset_y, scale_x, scale_y, settle_s=settle)
 
                         # Wait for game to process
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.4)
                         stable = await self._wait_for_stable(target_type, target_name,
-                                                              timeout=4.0, interval=0.4)
+                                                              timeout=2.0, interval=0.3)
 
                         # Check if screen changed (pixel-level comparison, much
                         # more sensitive than the old 16x16 perceptual hash)
-                        # Click actions need a HIGHER threshold — idle animations
-                        # cause false positives at 0.8%, but real clicks (End Turn)
-                        # trigger massive screen transitions well above 2%.
+                        # Click actions use a slightly higher threshold to filter
+                        # idle animations, but not so high that subtle changes
+                        # (e.g. playing a card, selecting a map node) are missed.
                         after_pil = await asyncio.to_thread(
                             self.screen_capture.capture_fresh, target_type, target_name)
                         is_click_action = cmd.split()[0].lower().endswith("click")
-                        diff_threshold = 0.02 if is_click_action else 0.008
+                        diff_threshold = 0.012 if is_click_action else 0.008
                         changed = ScreenCapture.pil_images_different(
                             before_pil, after_pil, fraction_threshold=diff_threshold)
 
@@ -597,11 +637,8 @@ class AgentLoop:
                                             # Recompute max_retries for new action type
                                             action_type = cmd.split()[0].lower()
                                             is_drag = action_type == "drag"
-                                            is_keyboard = action_type in ("press", "hold_key", "release_key", "type", "wait", "run_macro")
                                             if is_drag:
                                                 max_retries = MAX_RETRIES_DRAG
-                                            elif is_keyboard:
-                                                max_retries = MAX_RETRIES_KEY
                                             else:
                                                 max_retries = MAX_RETRIES_CLICK
                                             # Re-focus and continue with next attempt
@@ -732,7 +769,7 @@ class AgentLoop:
                             last_cmd, offset_x, offset_y, scale_x, scale_y)
                         await asyncio.sleep(0.8)
                         await self._wait_for_stable(target_type, target_name,
-                                                    timeout=4.0, interval=0.4)
+                                                    timeout=2.0, interval=0.3)
 
                         retry_pil = await asyncio.to_thread(
                             self.screen_capture.capture_fresh, target_type, target_name)
@@ -830,8 +867,10 @@ class AgentLoop:
                     status = "OK" if (i < len(attempt_counts) and attempt_counts[i] == 1) else "FAILED/RETRIED"
                     action_summaries.append(f"  {c}" + (f" ({r})" if r else "") + f" → {status}")
                 outcome = "screen changed" if overall_changed else "NO EFFECT"
+                # Include first line of Lead Agent directive (usually has game ID)
+                directive_summary = narration.split('\n')[0][:120] if narration else ""
                 history_entry = (
-                    f"Step {step}: {outcome}\n"
+                    f"Step {step}: {outcome} | {directive_summary}\n"
                     + "\n".join(action_summaries)
                 )
                 step_history.append(history_entry)

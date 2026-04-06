@@ -17,6 +17,7 @@ except ImportError:
 from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
 from macro_recorder import recorder
+from memories import MemoryStore
 
 app = FastAPI()
 
@@ -32,6 +33,7 @@ app.add_middleware(
 # Global instances
 agent = AgentLoop()
 screen_capture = ScreenCapture()
+memory_store = MemoryStore()
 connected_websockets = set()
 
 # Models
@@ -46,6 +48,7 @@ class StartRequest(BaseModel):
     use_grounding: bool = False
     grounding_model: str = ""
     max_budget_usd: float = 0.0
+    secondary_api_key: str = ""
 
 class InstructionUpdate(BaseModel):
     instructions: str
@@ -127,7 +130,8 @@ async def start_agent(req: StartRequest):
         role=req.role,
         use_grounding=req.use_grounding,
         grounding_model=req.grounding_model,
-        max_budget_usd=req.max_budget_usd
+        max_budget_usd=req.max_budget_usd,
+        secondary_api_key=req.secondary_api_key
     )
     return {"status": "success" if success else "error", "message": msg}
 
@@ -193,6 +197,43 @@ def toggle_recipe(index: int, enabled: bool = True):
 def delete_recipe(index: int):
     ok = agent.recipes.delete(index)
     return {"status": "success" if ok else "error"}
+
+# ── Memories CRUD ──
+
+class MemoryCreate(BaseModel):
+    content: str
+    game: str = ""
+    tags: list = []
+    source: str = "user"
+
+class MemoryUpdate(BaseModel):
+    content: str = None
+    game: str = None
+    tags: list = None
+
+@app.get("/api/memories")
+def list_memories(game: str = ""):
+    if game:
+        return {"memories": memory_store.search(game=game)}
+    return {"memories": memory_store.list_all()}
+
+@app.post("/api/memories")
+def create_memory(req: MemoryCreate):
+    m = memory_store.add(content=req.content, game=req.game, tags=req.tags, source=req.source)
+    return {"status": "success", "memory": m}
+
+@app.put("/api/memories/{memory_id}")
+def update_memory(memory_id: str, req: MemoryUpdate):
+    m = memory_store.update(memory_id, content=req.content, game=req.game, tags=req.tags)
+    if m:
+        return {"status": "success", "memory": m}
+    return JSONResponse(status_code=404, content={"error": "Memory not found"})
+
+@app.delete("/api/memories/{memory_id}")
+def delete_memory(memory_id: str):
+    if memory_store.delete(memory_id):
+        return {"status": "success"}
+    return JSONResponse(status_code=404, content={"error": "Memory not found"})
 
 # ── Gemini CLI fallback model list (no API key needed) ──
 GEMINI_CLI_MODELS = [

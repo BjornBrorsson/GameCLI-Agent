@@ -85,8 +85,13 @@ def _click_at(x, y, down_flag, up_flag):
     Each button event carries MOUSEEVENTF_ABSOLUTE coordinates so games that
     don't correlate separate MOVE and BUTTON events still see the position.
     Also does SetCursorPos first for GFN / streaming clients.
+    Pre-hovers at the target for 150ms so the game registers the cursor
+    before the click — many UIs need this to activate hover states / hitboxes.
     """
     ix, iy = int(x), int(y)
+    # 0. Pre-hover — move cursor to target so the game registers the element
+    _move_to(ix, iy)
+    time.sleep(0.15)
     # 1. SetCursorPos for GFN (reads via GetCursorPos)
     ctypes.windll.user32.SetCursorPos(ix, iy)
     time.sleep(0.05)

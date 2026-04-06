@@ -81,19 +81,8 @@ class SafetyFilter:
             if pat.search(reason):
                 return False, f"Blocked by safety filter: reason contains '{pat.pattern}'"
 
-        # 3. Coordinate bounds check for mouse actions
-        parts = command.strip().split()
-        cmd_type = parts[0].lower() if parts else ""
-        mouse_cmds = {"click", "right_click", "middle_click", "double_click", "hover", "scroll", "drag"}
-        if cmd_type in mouse_cmds and len(parts) >= 3:
-            try:
-                coords = [int(p) for p in parts[1:] if p.lstrip("-").isdigit()]
-                for i, c in enumerate(coords):
-                    limit = self.config.max_x if i % 2 == 0 else self.config.max_y
-                    if c < 0 or c > limit:
-                        return False, f"Blocked by safety filter: coordinate {c} out of bounds (max {limit})"
-            except ValueError:
-                pass  # Non-numeric args — let the input controller handle it
+        # 3. Coordinate bounds — clamping is done by clamp_coordinates() upstream.
+        #    check() no longer blocks on OOB coords.
 
         # 4. Rate limiting
         now = time.monotonic()
@@ -105,3 +94,45 @@ class SafetyFilter:
         self._last_action_time = now
 
         return True, ""
+
+    def clamp_coordinates(self, command: str) -> Tuple[str, bool, str]:
+        """Clamp mouse coordinates to the valid capture region.
+
+        Returns (clamped_command, was_clamped, details_string).
+        If coordinates were already in-bounds, returns the original command unchanged.
+        """
+        if not self.config.enabled:
+            return command, False, ""
+
+        parts = command.strip().split()
+        cmd_type = parts[0].lower() if parts else ""
+        mouse_cmds = {"click", "right_click", "middle_click", "double_click", "hover", "scroll", "drag"}
+        if cmd_type not in mouse_cmds or len(parts) < 3:
+            return command, False, ""
+
+        MARGIN = 5  # clamp to N pixels inside the edge, not the very edge
+        clamped = False
+        details = []
+        new_parts = [parts[0]]
+        coord_idx = 0
+        for p in parts[1:]:
+            if p.lstrip("-").isdigit():
+                val = int(p)
+                limit = self.config.max_x - MARGIN if coord_idx % 2 == 0 else self.config.max_y - MARGIN
+                lo = MARGIN
+                if val < lo:
+                    details.append(f"{val}->{lo}")
+                    val = lo
+                    clamped = True
+                elif val > limit:
+                    details.append(f"{val}->{limit}")
+                    val = limit
+                    clamped = True
+                new_parts.append(str(val))
+                coord_idx += 1
+            else:
+                new_parts.append(p)
+
+        new_cmd = " ".join(new_parts)
+        detail_str = ", ".join(details) if details else ""
+        return new_cmd, clamped, detail_str

@@ -396,19 +396,26 @@ class ActionVerifier:
 
     @staticmethod
     def nudge_action(action_str: str, attempt: int) -> str:
-        """Apply a small coordinate nudge to the action's target point for retries.
+        """Apply a coordinate nudge to the action's target point for retries.
         For drags: nudges the END point (the drop target).
         For clicks: nudges the click target.
         Each attempt tries a different direction around the original point.
+        Radius escalates: ~18px for first ring, ~35px for second ring.
         """
-        # Spiral pattern: up, right, left, down, upper-right, upper-left
+        # Two rings: inner (±18) then outer (±35) — covers a wider search area
         offsets = [
+            # Ring 1 — tight corrections (±18px)
             (0, -18),    # up (hitboxes often higher than visual center)
             (18, 0),     # right
             (-18, 0),    # left
             (0, 18),     # down
-            (18, -18),   # upper-right
-            (-18, -18),  # upper-left
+            # Ring 2 — wider search (±35px)
+            (0, -35),    # far up
+            (35, 0),     # far right
+            (-35, 0),    # far left
+            (0, 35),     # far down
+            (35, -35),   # far upper-right
+            (-35, -35),  # far upper-left
         ]
         dx, dy = offsets[attempt % len(offsets)]
 

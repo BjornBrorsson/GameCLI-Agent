@@ -197,15 +197,22 @@ INPUT: A screenshot of the current game state with YELLOW COORDINATE RULERS on a
 OUTPUT: A concise strategic directive in plain text (NOT JSON).
 
 Your job is to:
-1. Describe what you see on screen (game phase, important UI elements, threats, opportunities).
-2. Decide on the best high-level strategy for this moment.
-3. Give a clear directive to the Worker Agent, including:
+1. IDENTIFY THE GAME. State which game this is (e.g. "Slay the Spire", "Civilization VI",
+   "Stardew Valley"). If you recognise it, leverage your knowledge of the game's mechanics,
+   UI conventions, and optimal strategies. If you are unsure, say so and play generically.
+2. Describe what you see on screen (game phase, important UI elements, threats, opportunities).
+3. Decide on the best high-level strategy for this moment.
+4. Give a clear directive to the Worker Agent, including:
    - What actions to take and in what order
    - Which screen elements to interact with (describe their approximate position)
-   - Any keyboard shortcuts to prefer
+   - KEYBOARD SHORTCUTS: Always prefer keyboard hotkeys over mouse clicks when possible.
+     If you know the game's hotkeys (e.g. number keys for cards, E for end turn, Enter to
+     confirm), instruct the Worker to use them. They are faster and more reliable than clicks.
+   - If you discover a useful hotkey or game mechanic, instruct the Worker to save it with
+     save_memory so it persists across sessions.
    - Warnings about risks or things to avoid
 
-Keep your directive concise (3-6 sentences). Focus on WHAT to do, not HOW to format it.
+Keep your directive concise (3-8 sentences). Focus on WHAT to do, not HOW to format it.
 """
 
 WORKER_AGENT_PROMPT = """
@@ -233,6 +240,8 @@ COMMANDS (prefer keyboard over mouse when possible):
 - hover x y — move cursor without clicking.
 - wait seconds — pause (decimal ok). ONLY when the game needs time.
 - run_macro macro_name — run a pre-recorded sequence.
+- save_memory text — save a useful discovery (hotkey, strategy, game mechanic) for future sessions.
+  Example: save_memory In Slay The Spire, press 1-9 to select cards. Press E to end turn.
 
 COORDINATE PRECISION:
 - The screenshot is always 1280x720 pixels.
@@ -243,6 +252,51 @@ RULES:
 - Follow the Lead Agent's directive precisely.
 - Use keyboard shortcuts whenever possible.
 - Keep narration concise (2-4 sentences max).
+"""
+
+# ── Combined single-call prompt for CLI mode (avoids 2nd subprocess) ──
+COMBINED_AGENT_PROMPT = """
+You are an autonomous game-playing AI that analyzes screenshots and generates precise input commands.
+
+{role_instructions}
+
+INPUT: A screenshot of the current game state with YELLOW COORDINATE RULERS on all four edges.
+OUTPUT: Valid JSON only. No markdown, no backticks, no text outside the JSON.
+
+STEP 1 — ANALYZE: Identify the game, describe the current state, and decide on a strategy.
+STEP 2 — GENERATE COMMANDS: Produce precise input commands to execute that strategy.
+
+FORMAT:
+{{
+  "narration": "What game this is, what you see, and what you plan to do (2-5 sentences).",
+  "actions": [
+    {{"command": "press enter", "reason": "Confirm selection"}},
+    {{"command": "click 750 400", "reason": "Click the target element"}}
+  ]
+}}
+
+COMMANDS (prefer keyboard over mouse when possible):
+- press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc).
+- hold_key / release_key key — modifier hold/release (shift, ctrl, alt). Always pair them.
+- type text — type a string character by character.
+- click / right_click / middle_click / double_click x y — use when no keyboard shortcut exists.
+- drag x1 y1 x2 y2 — click-hold, move, release.
+- scroll x y amount — mouse wheel (positive=up, negative=down).
+- hover x y — move cursor without clicking.
+- wait seconds — pause (decimal ok). ONLY when the game needs time.
+- run_macro macro_name — run a pre-recorded sequence.
+- save_memory text — save a useful discovery (hotkey, strategy, game mechanic) for future sessions.
+
+COORDINATE PRECISION:
+- The screenshot is always 1280x720 pixels.
+- Use the yellow rulers to measure the EXACT center of elements. Always cross-reference.
+
+RULES:
+- Return ONLY valid JSON.
+- KEYBOARD SHORTCUTS: Always prefer keyboard hotkeys over mouse clicks when possible.
+  If you know the game's hotkeys, use them — they are faster and more reliable than clicks.
+- If you discover a useful hotkey or game mechanic, include a save_memory action.
+- Keep narration concise.
 """
 
 # ── Pricing per 1M tokens (input, output) in USD ──
@@ -308,9 +362,12 @@ class LLMIntegration:
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     }
 
-    def __init__(self, provider: str = "gemini_cli", api_key: str = None, max_budget_usd: float = 0.0):
+    def __init__(self, provider: str = "gemini_cli", api_key: str = None,
+                 secondary_api_key: str = None, max_budget_usd: float = 0.0):
         self.provider = provider
         self.api_key = api_key
+        self.secondary_api_key = secondary_api_key
+        self._using_secondary = False  # tracks which key is active
         self.cost = CostTracker(max_budget_usd)
         self.turn_count = 0
         if provider != "gemini_cli" and _requests is None:
@@ -341,64 +398,86 @@ class LLMIntegration:
 
     # ── Gemini CLI (free, default) ──
 
-    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
-        """Call Gemini via the local CLI tool. Free but slower."""
+    # Fixed temp paths — avoids mkstemp overhead per call.
+    # Overwritten each call; no accumulation of temp files.
+    _cli_tmp_dir = os.path.join(os.path.dirname(__file__), "..", ".tmp")
+    _cli_img_path = os.path.join(_cli_tmp_dir, "_screenshot.jpg")
+    _cli_prompt_path = os.path.join(_cli_tmp_dir, "_prompt.txt")
+
+    def _extract_json(self, text: str) -> dict:
+        """Robustly extract JSON from a potentially messy model response.
+        Handles markdown code blocks, conversational prefix/suffix, and trailing junk.
+        """
+        # 1. Clean up markdown code block markers
+        clean_text = re.sub(r'```(?:json)?', '', text).strip()
+        
+        # 2. Find the first '{' and last '}'
+        start_idx = clean_text.find('{')
+        end_idx = clean_text.rfind('}')
+        
+        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+            raise ValueError(f"No JSON object found in output. Raw output: {text[:300]}")
+            
+        json_str = clean_text[start_idx:end_idx + 1]
+        
+        # 3. Handle common LLM JSON errors (e.g. trailing commas, missing quotes in keys)
+        # Attempt standard parse first
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # Try some basic repairs if it fails
+            # Remove trailing commas before closing braces/brackets
+            repaired = re.sub(r',\s*([}\]])', r'\1', json_str)
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Failed to parse JSON even after repair. Error: {e}\nJSON string: {json_str[:300]}")
+
+    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str,
+                         expect_json: bool = True, reuse_image: bool = False):
+        """Call Gemini via the local CLI tool. Free but slower.
+        
+        If reuse_image=True, skips writing the screenshot (assumes it was
+        already written by a prior call in the same step).
+        """
         if not re.match(r'^[\w\-\.]+$', model_name):
             raise ValueError(f"Invalid model name format: {model_name}")
 
-        temp_img_path = None
-        temp_prompt_path = None
-        try:
-            tmp_dir = os.path.join(os.path.dirname(__file__), "..", ".tmp")
-            os.makedirs(tmp_dir, exist_ok=True)
+        os.makedirs(self._cli_tmp_dir, exist_ok=True)
+        workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+        # Write image (skip if caller says it's already there)
+        if not reuse_image:
             img_data = base64.b64decode(image_base64)
-            fd, temp_img_path = tempfile.mkstemp(suffix=".jpg", dir=tmp_dir)
-            with os.fdopen(fd, 'wb') as f:
+            with open(self._cli_img_path, 'wb') as f:
                 f.write(img_data)
 
-            fd2, temp_prompt_path = tempfile.mkstemp(suffix=".txt", dir=tmp_dir)
-            with os.fdopen(fd2, 'w', encoding='utf-8') as f:
-                f.write(prompt_text)
+        # Write prompt
+        with open(self._cli_prompt_path, 'w', encoding='utf-8') as f:
+            f.write(prompt_text)
 
-            workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            rel_img_path = os.path.relpath(temp_img_path, workspace_root)
-            rel_prompt_path = os.path.relpath(temp_prompt_path, workspace_root)
+        rel_img = os.path.relpath(self._cli_img_path, workspace_root)
+        rel_prompt = os.path.relpath(self._cli_prompt_path, workspace_root)
 
-            full_prompt = f"Analyze this image: @{rel_img_path}. Task instructions: @{rel_prompt_path}"
+        full_prompt = f"Analyze this image: @{rel_img}. Task instructions: @{rel_prompt}"
 
-            result = subprocess.run(
-                ["gemini", "-p", full_prompt, "--model", model_name],
-                input="1\n",
-                cwd=workspace_root,
-                capture_output=True, text=True, check=True,
-                shell=True
-            )
-            content = result.stdout.strip()
-            content, thinking = self._strip_thinking_tags(content)
-            if thinking:
-                print(f"  [thinking] {thinking}")
+        result = subprocess.run(
+            ["gemini", "-p", full_prompt, "--model", model_name],
+            input="1\n",
+            cwd=workspace_root,
+            capture_output=True, text=True, check=True,
+            shell=True,
+            timeout=120
+        )
+        content = result.stdout.strip()
+        content, thinking = self._strip_thinking_tags(content)
+        if thinking:
+            print(f"  [thinking] {thinking}")
 
-            if not expect_json:
-                return content
+        if not expect_json:
+            return content
 
-            # Clean up potential markdown wrappers
-            clean_content = re.sub(r'```(?:json)?', '', content).strip()
-            # Find the first { and the last }
-            start_idx = clean_content.find('{')
-            end_idx = clean_content.rfind('}')
-            if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-                raise ValueError(f"No JSON object found in output. Raw output: {content}")
-
-            json_str = clean_content[start_idx:end_idx + 1]
-            return json.loads(json_str)
-        finally:
-            for path in [temp_img_path, temp_prompt_path]:
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except:
-                        pass
+        return self._extract_json(content)
 
     # ── API providers (Gemini API / OpenRouter) ──
 
@@ -430,7 +509,7 @@ class LLMIntegration:
                     }}
                 ]
             }],
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "temperature": 0.7,
         }
 
@@ -441,16 +520,35 @@ class LLMIntegration:
         data = None
         elapsed = 0
 
+        # Determine which key to start with (stay on secondary once switched)
+        active_key = self.api_key if not self._using_secondary else (self.secondary_api_key or self.api_key)
+
         for attempt in range(MAX_API_RETRIES + 1):
+            headers["Authorization"] = f"Bearer {active_key}"
             try:
                 t0 = time.time()
                 resp = _requests.post(endpoint, headers=headers, json=body, timeout=120)
                 elapsed = time.time() - t0
                 resp.raise_for_status()
                 data = resp.json()
+                
+                # Check for truncation
+                finish_reason = data["choices"][0].get("finish_reason")
+                if finish_reason == "length":
+                    print(f"  [api] WARNING: Response truncated due to length (max_tokens={body['max_tokens']})")
+                
                 break
             except _requests.exceptions.HTTPError as e:
                 last_err = e
+                # ── Key fallback: on 429 with primary key, swap to secondary ──
+                if (resp is not None and resp.status_code == 429
+                        and not self._using_secondary
+                        and self.secondary_api_key
+                        and active_key != self.secondary_api_key):
+                    print(f"  [api] 429 rate-limited on primary key — switching to secondary key")
+                    active_key = self.secondary_api_key
+                    self._using_secondary = True
+                    continue  # retry immediately with secondary key
                 if resp is not None and resp.status_code in RETRYABLE and attempt < MAX_API_RETRIES:
                     wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
                     print(f"  [api] {resp.status_code} on attempt {attempt+1}, "
@@ -491,14 +589,7 @@ class LLMIntegration:
             return content
 
         # Parse JSON from content first so we don't lose the result if budget is exceeded
-        clean_content = re.sub(r'```(?:json)?', '', content).strip()
-        start_idx = clean_content.find('{')
-        end_idx = clean_content.rfind('}')
-        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-            raise ValueError(f"No JSON in API response: {content[:300]}")
-
-        json_str = clean_content[start_idx:end_idx + 1]
-        result_json = json.loads(json_str)
+        result_json = self._extract_json(content)
 
         try:
             self.cost.record(in_tok, out_tok, model_name)
@@ -520,7 +611,7 @@ class LLMIntegration:
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview",
                         role: str = "gamer", grounding_text: str = "", enabled_tools: list = None,
-                        step_history: str = ""):
+                        step_history: str = "", memories_text: str = ""):
         try:
             self.turn_count += 1
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
@@ -542,6 +633,15 @@ class LLMIntegration:
                 except Exception:
                     pass
 
+            # ── CLI fast-path: single combined call ──
+            # The CLI spawns a subprocess per call, so merging Lead+Worker
+            # into one call saves ~50% of the per-step latency.
+            if self.provider == "gemini_cli":
+                return self._get_next_action_combined(
+                    image_base64, game_instructions, model_name, role_instructions,
+                    grounding_text, extra_commands, step_history, memories_text)
+
+            # ── API path: two-call Lead+Worker (richer reasoning) ──
             # Phase 1: Lead Agent dictates strategy
             lead_prompt_template = LEAD_AGENT_PROMPT.replace("{role_instructions}", role_instructions)
             lead_full_prompt = (
@@ -552,6 +652,8 @@ class LLMIntegration:
                 lead_full_prompt += f"\n{grounding_text}\n"
             if extra_commands:
                 lead_full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+            if memories_text:
+                lead_full_prompt += f"\n{memories_text}\n"
             if step_history:
                 lead_full_prompt += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
                 lead_full_prompt += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
@@ -582,15 +684,48 @@ class LLMIntegration:
             return worker_response
         except BudgetExceededException:
             raise
+        except subprocess.TimeoutExpired as e:
+            print(f"CLI timeout after {e.timeout}s")
+            return {"narration": f"Error: CLI timed out after {e.timeout}s — model may be overloaded, try again", "actions": []}
         except subprocess.CalledProcessError as e:
-            print(f"Gemini CLI error: {e.stderr}")
-            return {"narration": f"CLI Error occurred: {e.stderr}", "actions": []}
+            stderr_short = (e.stderr or "")[:300]
+            print(f"Gemini CLI error (exit {e.returncode}): {stderr_short}")
+            return {"narration": f"Error: CLI failed (exit {e.returncode}): {stderr_short}", "actions": []}
         except json.JSONDecodeError as e:
             print(f"JSON parse error: {e}")
-            return {"narration": f"Failed to parse model response as JSON.", "actions": []}
+            return {"narration": f"Error: Failed to parse model response as JSON.", "actions": []}
         except Exception as e:
             print(f"Error in LLM integration: {e}")
-            return {"narration": f"Error occurred: {e}", "actions": []}
+            return {"narration": f"Error: {e}", "actions": []}
+
+    def _get_next_action_combined(self, image_base64: str, game_instructions: str,
+                                   model_name: str, role_instructions: str,
+                                   grounding_text: str, extra_commands: str,
+                                   step_history: str, memories_text: str):
+        """Single-call path for CLI mode — merges Lead+Worker into one subprocess call.
+        Cuts per-step latency roughly in half compared to two sequential CLI calls."""
+
+        prompt_template = COMBINED_AGENT_PROMPT.replace("{role_instructions}", role_instructions)
+        full_prompt = (
+            f"SYSTEM INSTRUCTIONS:\n{prompt_template}\n\n"
+            f"Game Instructions:\n{game_instructions}\n\n"
+        )
+        if grounding_text:
+            full_prompt += f"\n{grounding_text}\n"
+        if extra_commands:
+            full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+        if memories_text:
+            full_prompt += f"\n{memories_text}\n"
+        if step_history:
+            full_prompt += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
+            full_prompt += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
+        if self.turn_count % 5 == 0:
+            full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
+        full_prompt += "Please analyze the attached screenshot image and produce the JSON response."
+
+        response = self._call_gemini_cli(full_prompt, image_base64, model_name, expect_json=True)
+        print(f"  [combined_agent] narration: {response.get('narration', '')[:120]}...")
+        return response
 
     def retry_assist(self, image_base64: str, failed_cmd: str, failed_reason: str,
                      attempts: int, game_instructions: str, model_name: str):

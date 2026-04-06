@@ -288,5 +288,5 @@ class ScreenCapture:
         diff = np.abs(g1 - g2)
         changed = np.sum(diff > pixel_threshold)
         fraction = changed / g1.size
-        return fraction > fraction_threshold
+        return bool(fraction > fraction_threshold)
 
