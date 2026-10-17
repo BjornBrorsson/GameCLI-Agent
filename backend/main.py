@@ -1,3 +1,13 @@
+import sys
+
+# Windows consoles default to cp1252 — LLM output often contains Unicode
+# (em-dashes, arrows) that crashes print(). Force UTF-8 early.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,6 +28,7 @@ from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
 from macro_recorder import recorder
 from memories import MemoryStore
+from llm import find_cli_binary
 
 app = FastAPI()
 
@@ -244,6 +255,56 @@ GEMINI_CLI_MODELS = [
     "gemini-3.1-pro-preview",
 ]
 
+# Claude Code CLI model aliases — they always resolve to the latest of each tier.
+CLAUDE_CODE_CLI_MODELS = [
+    ("haiku", "Haiku (latest) — default, fastest"),
+    ("sonnet", "Sonnet (latest) — balanced"),
+    ("opus", "Opus (latest) — strongest, slowest"),
+]
+
+# Fallback if `agy models` can't be queried.
+ANTIGRAVITY_CLI_MODELS = [
+    "gemini-3.8-flash-low",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-high",
+    "claude-sonnet-5-5-low",
+    "claude-sonnet-5-5-medium",
+    "claude-sonnet-5-5-high",
+    "claude-opus-5-5-low",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5-high",
+]
+
+
+def _fetch_agy_models():
+    """Query `agy models` for the real authenticated model list."""
+    import subprocess
+    binary = find_cli_binary("agy")
+    if not binary:
+        return JSONResponse(status_code=400, content={
+            "error": "Antigravity CLI (agy) not found on PATH or %LOCALAPPDATA%\\agy\\bin."})
+    try:
+        result = subprocess.run([binary, "models"], capture_output=True,
+                                text=True, timeout=30)
+        models = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("fetching"):
+                continue
+            parts = line.split("\t", 1)
+            models.append({"id": parts[0].strip(),
+                           "name": parts[1].strip() if len(parts) > 1 else parts[0].strip()})
+        if not models:
+            raise RuntimeError("empty model list")
+        default = ("gemini-3.8-flash-low" if any(m["id"] == "gemini-3.8-flash-low" for m in models)
+                   else models[0]["id"])
+        return {"models": models, "default": default}
+    except Exception as e:
+        print(f"[models] agy models failed ({e}) — using fallback list")
+        return {"models": [{"id": m, "name": m} for m in ANTIGRAVITY_CLI_MODELS],
+                "default": "gemini-3.8-flash-low"}
+
+
 @app.post("/api/models")
 def get_models(req: ModelsRequest):
     """Fetch available models from the provider's API.
@@ -254,6 +315,19 @@ def get_models(req: ModelsRequest):
             "models": [{"id": m, "name": m} for m in GEMINI_CLI_MODELS],
             "default": "gemini-2.5-flash",
         }
+
+    if req.provider == "claude_code_cli":
+        if not find_cli_binary("claude"):
+            return JSONResponse(status_code=400, content={
+                "error": "Claude Code CLI not found. Install it and log in once "
+                         "(e.g. `irm https://claude.ai/install.ps1 | iex`)."})
+        return {
+            "models": [{"id": mid, "name": name} for mid, name in CLAUDE_CODE_CLI_MODELS],
+            "default": "haiku",
+        }
+
+    if req.provider == "antigravity_cli":
+        return _fetch_agy_models()
 
     if _requests is None:
         return JSONResponse(status_code=500, content={"error": "requests package not installed"})

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import './index.css';
 
 const PROVIDERS = [
+  { id: 'claude_code_cli', label: 'Claude Code CLI (Free)', needsKey: false },
+  { id: 'antigravity_cli', label: 'Antigravity CLI (Free)', needsKey: false },
   { id: 'gemini_cli', label: 'Gemini CLI (Free)', needsKey: false },
   { id: 'gemini_api', label: 'Gemini API', needsKey: true },
   { id: 'openrouter', label: 'OpenRouter', needsKey: true },
@@ -15,10 +17,10 @@ const ROLES = [
 ];
 
 function App() {
-  const [provider, setProvider] = useState('gemini_cli');
+  const [provider, setProvider] = useState('claude_code_cli');
   const [apiKey, setApiKey] = useState('');
   const [secondaryApiKey, setSecondaryApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState('haiku');
   const [customModel, setCustomModel] = useState('');
   const [availableModels, setAvailableModels] = useState([]);  // [{id, name}]
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -114,7 +116,7 @@ function App() {
   // Poll cost when running with a paid provider
   useEffect(() => {
     if (costIntervalRef.current) clearInterval(costIntervalRef.current);
-    if (isRunning && provider !== 'gemini_cli') {
+    if (isRunning && providerInfo?.needsKey) {
       const fetchCost = async () => {
         try {
           const res = await fetch('http://localhost:8000/api/cost');
@@ -210,7 +212,7 @@ function App() {
           setSelectedModel(s.model_name);
           setRole(s.role);
           setInstructions(s.game_instructions);
-          setProvider(s.provider || 'gemini_cli');
+          setProvider(s.provider || 'claude_code_cli');
           setUseGrounding(s.use_grounding || false);
           setGroundingModel(s.grounding_model || '');
         } else {
@@ -625,14 +627,18 @@ function App() {
                 )}
                 {availableModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
-              {provider !== 'gemini_cli' && (
+              {(providerInfo?.needsKey || provider === 'claude_code_cli' || provider === 'antigravity_cli') && (
                 <>
                   <label>Or enter custom model ID</label>
                   <input
                     type="text"
                     value={customModel}
                     onChange={e => setCustomModel(e.target.value)}
-                    placeholder={provider === 'openrouter' ? 'e.g. meta-llama/llama-4-maverick' : 'e.g. gemini-2.5-flash'}
+                    placeholder={
+                      provider === 'openrouter' ? 'e.g. meta-llama/llama-4-maverick'
+                      : provider === 'claude_code_cli' ? 'e.g. claude-haiku-4-5-20251001'
+                      : provider === 'antigravity_cli' ? 'e.g. gemini-3.8-flash-low'
+                      : 'e.g. gemini-2.5-flash'}
                   />
                 </>
               )}

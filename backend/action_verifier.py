@@ -232,7 +232,9 @@ def _rebuild_action(action_str: str, new_coords: List[Tuple[int, int]]) -> str:
 class ActionVerifier:
     """Verifies and adjusts action coordinates using local template matching."""
 
-    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit", "reset", "load"]
+    # 'load' intentionally omitted — "LOAD GAME" is a routine menu item and the
+    # 80px OCR region bleeds into neighbouring buttons on stacked menus.
+    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit", "reset"]
 
     def __init__(self):
         self.last_adjustments: List[dict] = []  # log of recent adjustments

@@ -1,4 +1,5 @@
 import re
+import shutil
 import subprocess
 import json
 import base64
@@ -315,6 +316,35 @@ MODEL_PRICING = {
 }
 DEFAULT_PRICING = (1.00, 3.00)  # conservative fallback
 
+# Providers that shell out to a local, pre-authenticated CLI binary.
+# No API key and no `requests` dependency required — each CLI uses its
+# own stored login (e.g. ~/.claude credentials, agy account, gemini auth).
+CLI_PROVIDERS = frozenset({"gemini_cli", "claude_code_cli", "antigravity_cli"})
+
+
+def is_cli_provider(provider: str) -> bool:
+    return provider in CLI_PROVIDERS
+
+
+def find_cli_binary(*names: str):
+    """Resolve a CLI binary: PATH first, then well-known install locations."""
+    for name in names:
+        exe = shutil.which(name)
+        if exe:
+            return exe
+    home = os.path.expanduser("~")
+    well_known = [
+        os.path.join(home, ".local", "bin", "claude.exe"),
+        os.path.join(home, ".local", "bin", "claude"),
+        os.path.join(os.environ.get("LOCALAPPDATA") or home, "agy", "bin", "agy.exe"),
+    ]
+    wanted = {n.lower() for n in names}
+    for cand in well_known:
+        stem = os.path.splitext(os.path.basename(cand))[0].lower()
+        if stem in wanted and os.path.exists(cand):
+            return cand
+    return None
+
 
 class BudgetExceededException(Exception):
     """Raised when the session budget limit is reached."""
@@ -370,7 +400,7 @@ class LLMIntegration:
         self._using_secondary = False  # tracks which key is active
         self.cost = CostTracker(max_budget_usd)
         self.turn_count = 0
-        if provider != "gemini_cli" and _requests is None:
+        if provider not in CLI_PROVIDERS and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
 
@@ -391,8 +421,8 @@ class LLMIntegration:
 
     def _call(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
         """Route to the configured provider."""
-        if self.provider == "gemini_cli":
-            return self._call_gemini_cli(prompt_text, image_base64, model_name, expect_json=expect_json)
+        if self.provider in CLI_PROVIDERS:
+            return self._call_cli(prompt_text, image_base64, model_name, expect_json=expect_json)
         else:
             return self._call_api(prompt_text, image_base64, model_name, expect_json=expect_json)
 
@@ -433,10 +463,11 @@ class LLMIntegration:
             except json.JSONDecodeError as e:
                 raise ValueError(f"Failed to parse JSON even after repair. Error: {e}\nJSON string: {json_str[:300]}")
 
-    def _call_gemini_cli(self, prompt_text: str, image_base64: str, model_name: str,
-                         expect_json: bool = True, reuse_image: bool = False):
-        """Call Gemini via the local CLI tool. Free but slower.
-        
+    def _call_cli(self, prompt_text: str, image_base64: str, model_name: str,
+                  expect_json: bool = True, reuse_image: bool = False):
+        """Call a local agentic CLI: Gemini CLI, Claude Code, or Antigravity (agy).
+        Free (uses each CLI's own stored auth) but slower than a direct API.
+
         If reuse_image=True, skips writing the screenshot (assumes it was
         already written by a prior call in the same step).
         """
@@ -456,18 +487,61 @@ class LLMIntegration:
         with open(self._cli_prompt_path, 'w', encoding='utf-8') as f:
             f.write(prompt_text)
 
-        rel_img = os.path.relpath(self._cli_img_path, workspace_root)
-        rel_prompt = os.path.relpath(self._cli_prompt_path, workspace_root)
-
-        full_prompt = f"Analyze this image: @{rel_img}. Task instructions: @{rel_prompt}"
+        if self.provider == "gemini_cli":
+            rel_img = os.path.relpath(self._cli_img_path, workspace_root)
+            rel_prompt = os.path.relpath(self._cli_prompt_path, workspace_root)
+            full_prompt = f"Analyze this image: @{rel_img}. Task instructions: @{rel_prompt}"
+            cmd = ["gemini", "-p", full_prompt, "--model", model_name]
+            use_shell = True
+            timeout = 120
+            stdin = "1\n"
+        else:
+            # Agentic CLIs (Claude Code, agy) read files with their own tools —
+            # pass plain absolute paths and let the agent load them itself.
+            img_abs = os.path.abspath(self._cli_img_path).replace("\\", "/")
+            prompt_abs = os.path.abspath(self._cli_prompt_path).replace("\\", "/")
+            full_prompt = (
+                f"Use your file-reading tool to view the screenshot image at \"{img_abs}\" "
+                f"and to read the task instructions at \"{prompt_abs}\". "
+                f"Then follow those instructions exactly. "
+                f"Your final reply must contain ONLY the raw JSON object — no prose, no markdown."
+            )
+            stdin = None
+            use_shell = False
+            timeout = 300
+            if self.provider == "claude_code_cli":
+                binary = find_cli_binary("claude")
+                if not binary:
+                    raise RuntimeError(
+                        "Claude Code CLI not found on PATH or ~/.local/bin. "
+                        "Install it and log in once (e.g. `irm https://claude.ai/install.ps1 | iex`).")
+                tail = ["-p", full_prompt, "--model", model_name,
+                        "--dangerously-skip-permissions",
+                        "--add-dir", self._cli_tmp_dir,
+                        "--output-format", "text", "--max-turns", "8"]
+                # npm-installed builds land as .cmd shims that need cmd.exe
+                cmd = (["cmd", "/c", binary] if binary.lower().endswith((".cmd", ".bat"))
+                       else [binary]) + tail
+            elif self.provider == "antigravity_cli":
+                binary = find_cli_binary("agy")
+                if not binary:
+                    raise RuntimeError(
+                        "Antigravity CLI (agy) not found on PATH or %LOCALAPPDATA%\\agy\\bin.")
+                cmd = [binary, "-p", full_prompt, "--model", model_name,
+                       "--print-timeout", "240s",
+                       "--dangerously-skip-permissions",
+                       "--add-dir", self._cli_tmp_dir,
+                       "--output-format", "text"]
+            else:
+                raise ValueError(f"Unknown CLI provider: {self.provider}")
 
         result = subprocess.run(
-            ["gemini", "-p", full_prompt, "--model", model_name],
-            input="1\n",
+            cmd,
+            input=stdin,
             cwd=workspace_root,
             capture_output=True, text=True, check=True,
-            shell=True,
-            timeout=120
+            shell=use_shell,
+            timeout=timeout
         )
         content = result.stdout.strip()
         content, thinking = self._strip_thinking_tags(content)
@@ -636,7 +710,7 @@ class LLMIntegration:
             # ── CLI fast-path: single combined call ──
             # The CLI spawns a subprocess per call, so merging Lead+Worker
             # into one call saves ~50% of the per-step latency.
-            if self.provider == "gemini_cli":
+            if self.provider in CLI_PROVIDERS:
                 return self._get_next_action_combined(
                     image_base64, game_instructions, model_name, role_instructions,
                     grounding_text, extra_commands, step_history, memories_text)
@@ -685,12 +759,12 @@ class LLMIntegration:
         except BudgetExceededException:
             raise
         except subprocess.TimeoutExpired as e:
-            print(f"CLI timeout after {e.timeout}s")
+            print(f"{self.provider} timeout after {e.timeout}s")
             return {"narration": f"Error: CLI timed out after {e.timeout}s — model may be overloaded, try again", "actions": []}
         except subprocess.CalledProcessError as e:
             stderr_short = (e.stderr or "")[:300]
-            print(f"Gemini CLI error (exit {e.returncode}): {stderr_short}")
-            return {"narration": f"Error: CLI failed (exit {e.returncode}): {stderr_short}", "actions": []}
+            print(f"{self.provider} error (exit {e.returncode}): {stderr_short}")
+            return {"narration": f"Error: {self.provider} failed (exit {e.returncode}): {stderr_short}", "actions": []}
         except json.JSONDecodeError as e:
             print(f"JSON parse error: {e}")
             return {"narration": f"Error: Failed to parse model response as JSON.", "actions": []}
@@ -723,7 +797,7 @@ class LLMIntegration:
             full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
         full_prompt += "Please analyze the attached screenshot image and produce the JSON response."
 
-        response = self._call_gemini_cli(full_prompt, image_base64, model_name, expect_json=True)
+        response = self._call_cli(full_prompt, image_base64, model_name, expect_json=True)
         print(f"  [combined_agent] narration: {response.get('narration', '')[:120]}...")
         return response
 

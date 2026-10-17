@@ -10,7 +10,7 @@ from screen_capture import ScreenCapture
 from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
 from action_verifier import ActionVerifier
 from game_state import detect_phase, PHASE_TOOLS
-from llm import LLMIntegration, BudgetExceededException
+from llm import LLMIntegration, BudgetExceededException, is_cli_provider
 from logger import SessionLogger, ExecutionLogger, ConsoleLogger
 from safety import SafetyFilter
 from grounding import LLMGrounding
@@ -164,8 +164,8 @@ class AgentLoop:
         await _console_log("Agent initialized. Starting session logger...")
         
         try:
-            llm = LLMIntegration(provider=provider, api_key=api_key if provider != "gemini_cli" else None,
-                                 secondary_api_key=secondary_api_key if provider != "gemini_cli" else None,
+            llm = LLMIntegration(provider=provider, api_key=api_key if not is_cli_provider(provider) else None,
+                                 secondary_api_key=secondary_api_key if not is_cli_provider(provider) else None,
                                  max_budget_usd=max_budget_usd)
             self.llm = llm  # expose for cost tracking
         except Exception as e:

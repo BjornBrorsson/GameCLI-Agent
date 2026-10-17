@@ -7,7 +7,7 @@ An autonomous AI agent that plays turn-based games by watching your screen and c
 ## Features
 
 - **Vision-based gameplay** — captures screenshots, draws coordinate rulers for precision, and sends them to an LLM for analysis
-- **Multiple LLM providers** — Gemini CLI (free), Gemini API, or OpenRouter (access to Claude, GPT-4o, etc.)
+- **Multiple LLM providers** — Claude Code CLI (free, uses your Claude login), Antigravity CLI (`agy`, free), Gemini CLI (free), Gemini API, or OpenRouter (access to GPT-4o, etc.)
 - **Smart action verification** — OpenCV template matching + OCR to correct coordinate drift before clicking
 - **Retry & recovery** — automatic retries with coordinate nudging, mid-retry LLM consultation, and loop detection
 - **Game phase detection** — OCR-based detection of combat, map, card rewards, rest sites, shops, and events
@@ -26,7 +26,7 @@ frontend/          React UI (Vite)
 backend/           Python (FastAPI + asyncio)
   main.py          REST API + WebSocket server
   agent_loop.py    Core loop: capture → detect phase → LLM → verify → execute → reflect
-  llm.py           LLM integration (Gemini CLI, Gemini API, OpenRouter)
+  llm.py           LLM integration (Claude Code CLI, Antigravity CLI, Gemini CLI, Gemini API, OpenRouter)
   screen_capture.py  Screenshot capture, perceptual hashing, ruler drawing
   input_controller.py  Mouse/keyboard input via Windows APIs
   action_verifier.py   OpenCV template matching + OCR coordinate correction
@@ -41,6 +41,8 @@ backend/           Python (FastAPI + asyncio)
 - **Node.js 18+**
 - **Tesseract OCR** — [download installer](https://github.com/UB-Mannheim/tesseract/wiki). Install to the default path (`C:\Program Files\Tesseract-OCR\`)
 - **One of the following LLM providers:**
+  - [Claude Code CLI](https://claude.ai/code) installed and authenticated (free with your Claude plan; `irm https://claude.ai/install.ps1 | iex` on Windows) — **default**, uses Haiku
+  - [Antigravity CLI](https://antigravity.google/) (`agy`) installed and authenticated (free)
   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated (free)
   - Gemini API key from [Google AI Studio](https://aistudio.google.com/)
   - OpenRouter API key from [openrouter.ai](https://openrouter.ai/)
@@ -124,7 +126,7 @@ Select the role from the dashboard dropdown before starting the agent. The role 
 |---------|----------|-------------|
 | Game objective | `Game Instructions.md` | What the agent should try to accomplish |
 | Agent role | Dashboard UI | How the agent approaches the game (Gamer, Reviewer, Tester, Speedrunner) |
-| LLM provider | Dashboard UI | Gemini CLI, Gemini API, or OpenRouter |
+| LLM provider | Dashboard UI | Claude Code CLI, Antigravity CLI, Gemini CLI, Gemini API, or OpenRouter |
 | Screen source | Dashboard UI | Which monitor or window to watch |
 | API key | Dashboard UI | Entered at runtime, never stored on disk |
 
