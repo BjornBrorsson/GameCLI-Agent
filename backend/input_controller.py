@@ -89,9 +89,10 @@ def _click_at(x, y, down_flag, up_flag):
     before the click — many UIs need this to activate hover states / hitboxes.
     """
     ix, iy = int(x), int(y)
-    # 0. Pre-hover — move cursor to target so the game registers the element
+    # 0. Pre-hover — move cursor to target so the game registers the element.
+    # Streaming clients relay input with extra latency, so hover/hold longer.
     _move_to(ix, iy)
-    time.sleep(0.15)
+    time.sleep(0.3 if _streaming else 0.15)
     # 1. SetCursorPos for GFN (reads via GetCursorPos)
     ctypes.windll.user32.SetCursorPos(ix, iy)
     time.sleep(0.05)
@@ -109,7 +110,7 @@ def _click_at(x, y, down_flag, up_flag):
     if result == 0:
         err = ctypes.get_last_error()
         print(f"  [!] SendInput click-down FAILED error={err}")
-    time.sleep(0.08)
+    time.sleep(0.15 if _streaming else 0.08)
     # 4. Button UP with absolute position
     extra2 = ctypes.c_ulong(0)
     mi_up = _MouseInput(abs_x, abs_y, 0,
@@ -121,11 +122,125 @@ def _click_at(x, y, down_flag, up_flag):
     if result == 0:
         err = ctypes.get_last_error()
         print(f"  [!] SendInput click-up FAILED error={err}")
+        if _target_hwnd is not None and down_flag == MOUSEEVENTF_LEFTDOWN:
+            pt = ctypes.wintypes.POINT(ix, iy)
+            ctypes.windll.user32.ScreenToClient(_target_hwnd, ctypes.byref(pt))
+            lparam = ((pt.y & 0xFFFF) << 16) | (pt.x & 0xFFFF)
+            ctypes.windll.user32.PostMessageW(_target_hwnd, WM_MOUSEMOVE, 0, lparam)
+            time.sleep(0.04)
+            ctypes.windll.user32.PostMessageW(_target_hwnd, WM_LBUTTONDOWN, 1, lparam)
+            time.sleep(0.08)
+            ctypes.windll.user32.PostMessageW(_target_hwnd, WM_LBUTTONUP, 0, lparam)
+            print(f"  [*] Fallback PostMessage click to client ({pt.x},{pt.y}) on hwnd={_target_hwnd}")
 
 # -------------------------------------------------------------------
+# Target-window safety: never send input to a window other than the game.
 
 import json
 import os
+
+WM_MOUSEMOVE   = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP   = 0x0202
+WM_KEYDOWN     = 0x0100
+WM_KEYUP       = 0x0101
+GA_ROOT = 2
+
+_target_hwnd = None
+_streaming = False  # target is a cloud-streaming client (GeForce NOW etc.)
+
+
+def set_streaming(on: bool):
+    """Streaming clients need longer hover/hold times, and keys posted to
+    their window never reach the remote game (GCA-017)."""
+    global _streaming
+    _streaming = bool(on)
+
+
+class InputBlockedError(RuntimeError):
+    """The input would land on a window other than the target game."""
+
+
+def set_target_window(hwnd, left=0, top=0):
+    """Register the game window. While set, mouse input is only sent to points
+    inside it and keyboard input only while it is in the foreground."""
+    global _target_hwnd
+    _target_hwnd = hwnd
+
+
+def _root_window(hwnd):
+    return ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT) if hwnd else 0
+
+
+def _window_title(hwnd) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+    return buf.value
+
+
+def _bring_to_front(hwnd):
+    """Best-effort foreground switch (Alt trick lets SetForegroundWindow work
+    from a background process)."""
+    user32 = ctypes.windll.user32
+    user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+    user32.SetForegroundWindow(hwnd)
+    user32.keybd_event(0x12, 0, 2, 0)  # Alt up
+    time.sleep(0.15)
+
+
+def _ensure_point_on_target(x: int, y: int):
+    """Raise InputBlockedError unless screen point (x, y) shows the target
+    window. Tries one foreground switch first."""
+    if _target_hwnd is None:
+        return
+    user32 = ctypes.windll.user32
+    for attempt in range(2):
+        hit = _root_window(user32.WindowFromPoint(ctypes.wintypes.POINT(int(x), int(y))))
+        if hit == _root_window(_target_hwnd):
+            return
+        if attempt == 0:
+            _bring_to_front(_target_hwnd)
+    raise InputBlockedError(
+        f"point ({int(x)},{int(y)}) is covered by '{_window_title(hit) or hit}', not the game window")
+
+
+def _target_is_foreground() -> bool:
+    if _target_hwnd is None:
+        return True
+    fg = _root_window(ctypes.windll.user32.GetForegroundWindow())
+    if fg == _root_window(_target_hwnd):
+        return True
+    _bring_to_front(_target_hwnd)
+    return _root_window(ctypes.windll.user32.GetForegroundWindow()) == _root_window(_target_hwnd)
+
+
+# Virtual-key codes for the PostMessage fallback (game not in the foreground).
+_VK_NAMED = {
+    "space": 0x20, "enter": 0x0D, "return": 0x0D, "escape": 0x1B, "esc": 0x1B,
+    "tab": 0x09, "backspace": 0x08, "delete": 0x2E, "insert": 0x2D,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+    "shift": 0x10, "ctrl": 0x11, "alt": 0x12,
+    **{f"f{i}": 0x6F + i for i in range(1, 13)},
+}
+
+
+def _vk_for(key: str) -> int:
+    if key in _VK_NAMED:
+        return _VK_NAMED[key]
+    if len(key) == 1 and key.isalnum():
+        return ord(key.upper())
+    return 0
+
+
+def _post_key(key: str) -> bool:
+    vk = _vk_for(key)
+    if not vk or _target_hwnd is None:
+        return False
+    ctypes.windll.user32.PostMessageW(_target_hwnd, WM_KEYDOWN, vk, 0)
+    time.sleep(0.05)
+    ctypes.windll.user32.PostMessageW(_target_hwnd, WM_KEYUP, vk, 0xC0000001)
+    return True
 
 MACROS_FILE = os.path.join(os.path.dirname(__file__), "..", "macros.json")
 
@@ -229,36 +344,36 @@ class InputController:
         All mouse operations use SendInput + SetCursorPos for consistency.
         Keyboard operations use pydirectinput.
         settle_s: drag settle time at destination (increased on retries).
+
+        Returns "ok", "blocked: <why>" when the input would have landed on
+        another window (nothing was sent), or "error: <why>".
         """
         parts = action_string.strip().split(" ")
         cmd = parts[0].lower()
-        
+
         try:
-            if cmd == "click" and len(parts) >= 3:
+            if cmd in ("click", "right_click", "middle_click", "double_click") and len(parts) >= 3:
                 x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
-                print(f"  click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
-                _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
-            elif cmd == "right_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
-                print(f"  right_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
-                _click_at(x, y, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
-            elif cmd == "middle_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
-                print(f"  middle_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
-                _click_at(x, y, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)
-            elif cmd == "double_click" and len(parts) >= 3:
-                x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
-                print(f"  double_click: img({parts[1]},{parts[2]}) -> screen({x},{y})")
-                _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
-                time.sleep(0.05)
-                _click_at(x, y, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+                _ensure_point_on_target(x, y)
+                print(f"  {cmd}: img({parts[1]},{parts[2]}) -> screen({x},{y})")
+                down, up = {"click": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+                            "double_click": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+                            "right_click": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+                            "middle_click": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)}[cmd]
+                _click_at(x, y, down, up)
+                if cmd == "double_click":
+                    time.sleep(0.05)
+                    _click_at(x, y, down, up)
             elif cmd == "drag" and len(parts) >= 5:
                 x1, y1 = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
                 x2, y2 = self._translate(int(parts[3]), int(parts[4]), offset_x, offset_y, scale_x, scale_y)
+                _ensure_point_on_target(x1, y1)
+                _ensure_point_on_target(x2, y2)
                 print(f"  drag: img({parts[1]},{parts[2]})->({parts[3]},{parts[4]}) -> screen({x1},{y1})->({x2},{y2}) settle={settle_s:.2f}s")
                 self._drag(x1, y1, x2, y2, settle_s=settle_s)
             elif cmd == "scroll" and len(parts) >= 4:
                 x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
+                _ensure_point_on_target(x, y)
                 amount = int(parts[3])
                 print(f"  scroll: img({parts[1]},{parts[2]}) amount={amount} -> screen({x},{y})")
                 _move_to(x, y)
@@ -266,20 +381,27 @@ class InputController:
                 _send_button(MOUSEEVENTF_WHEEL, mouse_data=amount * WHEEL_DELTA)
             elif cmd == "hover" and len(parts) >= 3:
                 x, y = self._translate(int(parts[1]), int(parts[2]), offset_x, offset_y, scale_x, scale_y)
+                _ensure_point_on_target(x, y)
                 print(f"  hover: img({parts[1]},{parts[2]}) -> screen({x},{y})")
                 _move_to(x, y)
-            elif cmd == "press" and len(parts) >= 2:
-                key = " ".join(parts[1:])
-                pydirectinput.press(key)
-            elif cmd == "hold_key" and len(parts) >= 2:
-                key = parts[1].lower()
-                pydirectinput.keyDown(key)
-            elif cmd == "release_key" and len(parts) >= 2:
-                key = parts[1].lower()
-                pydirectinput.keyUp(key)
-            elif cmd == "type" and len(parts) >= 2:
-                text = " ".join(parts[1:])
-                pydirectinput.write(text, interval=0.05)
+            elif cmd in ("press", "hold_key", "release_key", "type") and len(parts) >= 2:
+                # Keys go to whatever window has focus, so only send them
+                # while the game is in front. Otherwise post single key
+                # presses straight to the game window (never both).
+                key = " ".join(parts[1:]).lower() if cmd == "press" else parts[1].lower()
+                if not _target_is_foreground():
+                    if cmd == "press" and not _streaming and _post_key(key):
+                        print(f"  press {key}: game not in front — posted to its window")
+                        return "ok"
+                    raise InputBlockedError("game window is not in the foreground")
+                if cmd == "press":
+                    pydirectinput.press(key)
+                elif cmd == "hold_key":
+                    pydirectinput.keyDown(key)
+                elif cmd == "release_key":
+                    pydirectinput.keyUp(key)
+                else:
+                    pydirectinput.write(" ".join(parts[1:]), interval=0.05)
             elif cmd == "wait" and len(parts) >= 2:
                 sec = float(parts[1])
                 time.sleep(sec)
@@ -288,5 +410,11 @@ class InputController:
                 self._run_macro(macro_name, offset_x, offset_y, scale_x)
             else:
                 print(f"Unknown or malformed command: {action_string}")
+                return "error: unknown or malformed command"
+        except InputBlockedError as e:
+            print(f"  [safety] Input blocked — {e}")
+            return f"blocked: {e}"
         except Exception as e:
             print(f"Failed to execute command '{action_string}': {e}")
+            return f"error: {e}"
+        return "ok"

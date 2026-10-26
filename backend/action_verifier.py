@@ -45,6 +45,11 @@ except ImportError:
 # Minimum confidence to accept a template match (TM_CCOEFF_NORMED range: -1 to 1)
 MIN_CONFIDENCE = 0.55
 
+# Largest correction the verifier may apply to a target, in image pixels.
+# Bigger "matches" are usually a look-alike element (another X button,
+# another toolbar slot), so the LLM's coordinates are kept instead.
+MAX_SHIFT_PX = 24
+
 # Template half-sizes (radius in pixels, in image space)
 TEMPLATE_RADIUS = 48  # 96x96 template — large enough to capture unique element visuals
 
@@ -234,7 +239,10 @@ class ActionVerifier:
 
     # 'load' intentionally omitted — "LOAD GAME" is a routine menu item and the
     # 80px OCR region bleeds into neighbouring buttons on stacked menus.
-    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit", "reset"]
+    # "exit"/"main menu": in the GFN Olden Era run a stray click hit "Exit to
+    # Main Menu" and only the confirmation dialog saved the session.
+    HIGH_RISK_KEYWORDS = ["delete", "abandon", "overwrite", "quit", "reset",
+                          "exit", "main menu", "surrender", "concede", "resign", "retire"]
 
     def __init__(self):
         self.last_adjustments: List[dict] = []  # log of recent adjustments
@@ -303,6 +311,7 @@ class ActionVerifier:
                 ocr_status = None  # OCR not applicable
 
             dx, dy = nx - ox, ny - oy
+            too_far = max(abs(dx), abs(dy)) > MAX_SHIFT_PX
             adj = {
                 "point": label,
                 "original": (ox, oy),
@@ -310,10 +319,11 @@ class ActionVerifier:
                 "delta": (dx, dy),
                 "confidence": round(conf, 3),
                 "ocr": ocr_status,
+                "rejected": "too far" if too_far and conf >= MIN_CONFIDENCE else None,
             }
             adjustments.append(adj)
 
-            if conf >= MIN_CONFIDENCE:
+            if conf >= MIN_CONFIDENCE and not too_far:
                 new_coords.append((nx, ny))
             else:
                 # Low confidence — keep original coordinates
@@ -444,6 +454,8 @@ class ActionVerifier:
             dx, dy = adj["delta"]
             conf = adj["confidence"]
             status = "✓" if conf >= MIN_CONFIDENCE else "✗ LOW"
+            if adj.get("rejected"):
+                status = f"✗ kept original ({adj['rejected']})"
             moved = f"Δ({dx:+d},{dy:+d})" if (dx != 0 or dy != 0) else "no shift"
             ocr = adj.get("ocr")
             ocr_tag = f" ocr={ocr}" if ocr is not None else ""

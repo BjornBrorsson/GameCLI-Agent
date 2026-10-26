@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import './index.css';
 
 const PROVIDERS = [
+  { id: 'anthropic_api', label: 'Anthropic API (fast)', needsKey: false, optionalKey: true },
   { id: 'claude_code_cli', label: 'Claude Code CLI (Free)', needsKey: false },
   { id: 'antigravity_cli', label: 'Antigravity CLI (Free)', needsKey: false },
   { id: 'gemini_cli', label: 'Gemini CLI (Free)', needsKey: false },
@@ -32,6 +33,14 @@ function App() {
   const [role, setRole] = useState('gamer');
   const [useGrounding, setUseGrounding] = useState(false);
   const [groundingModel, setGroundingModel] = useState('');
+  const [captureMode, setCaptureMode] = useState('auto');
+  const [maxMinutes, setMaxMinutes] = useState('');          // '' or 0 = no limit
+  const [closeAfterLimit, setCloseAfterLimit] = useState(true);
+  const [closeAfterMinutes, setCloseAfterMinutes] = useState(15);
+  const [timer, setTimer] = useState({});                    // from /api/status
+  const [dualFrame, setDualFrame] = useState(false);         // second frame ~0.4 s later
+  const [nowTick, setNowTick] = useState(Date.now());
+  const [report, setReport] = useState(null);  // {path, text} of the end-of-run report
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -64,7 +73,13 @@ function App() {
     checkResumableSession();
 
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      // Detach onclose first: otherwise its auto-reconnect opens a second
+      // socket (React StrictMode mounts twice in dev) and every log shows twice.
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       if (previewIntervalRef.current) clearInterval(previewIntervalRef.current);
       if (costIntervalRef.current) clearInterval(costIntervalRef.current);
     };
@@ -116,7 +131,7 @@ function App() {
   // Poll cost when running with a paid provider
   useEffect(() => {
     if (costIntervalRef.current) clearInterval(costIntervalRef.current);
-    if (isRunning && providerInfo?.needsKey) {
+    if (isRunning && (providerInfo?.needsKey || providerInfo?.optionalKey)) {
       const fetchCost = async () => {
         try {
           const res = await fetch('http://localhost:8000/api/cost');
@@ -229,10 +244,36 @@ function App() {
       setIsRunning(data.is_running);
       setIsPaused(data.is_paused || false);
       setIsRecordingMacro(data.is_recording_macro || false);
+      setTimer(data.timer || {});
     } catch (e) {
       console.error('Failed to check status', e);
     }
   };
+
+  // Poll status so the time limit can end a run (and the close countdown
+  // keeps showing) without any click in the dashboard.
+  useEffect(() => {
+    const id = setInterval(checkStatus, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const fmtLeft = (epochS) => {
+    const s = Math.max(0, Math.round(epochS - nowTick / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  const timerBanner = (timer.stop_at || timer.close_at) && (
+    <div className="timer-banner">
+      {timer.stop_at
+        ? <>Time limit: the test stops in <b>{fmtLeft(timer.stop_at)}</b></>
+        : <>Closing <b>{timer.close_target}</b> in <b>{fmtLeft(timer.close_at)}</b></>}
+    </div>
+  );
 
   const fetchMacros = async () => {
     try {
@@ -367,6 +408,7 @@ function App() {
   };
 
   const connectWebSocket = () => {
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;  // already connected/connecting
     const ws = new WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
       const raw = event.data;
@@ -423,6 +465,14 @@ function App() {
       if (stripped.startsWith('STATUS:') && stripped.includes('resumed')) {
         setIsPaused(false);
       }
+      if (stripped.startsWith('REPORT:')) {
+        openReport();
+      }
+      // Goal progress, stuck handling and streaming detection are worth showing.
+      if (/^STATUS: (Goal|Stuck|Streaming|All goals|Note|Writing the end-of-run report)/.test(stripped)) {
+        setLogs((prev) => [...prev, msg]);
+        return;
+      }
       if (stripped.startsWith('STATUS:') || stripped.startsWith('THINKING:')) {
         console.log(msg);
         if (stripped.startsWith('THINKING:')) {
@@ -460,7 +510,11 @@ function App() {
           provider: provider,
           role: role,
           use_grounding: useGrounding,
-          grounding_model: groundingModel
+          grounding_model: groundingModel,
+          capture_mode: captureMode,
+          max_minutes: Number(maxMinutes) || 0,
+          close_target_after_minutes: (Number(maxMinutes) > 0 && closeAfterLimit) ? (Number(closeAfterMinutes) || 0) : -1,
+          dual_frame: dualFrame
         })
       });
       
@@ -475,6 +529,32 @@ function App() {
       setLogs(prev => [...prev, `ERROR: Could not connect to backend: ${e.message}`]);
     }
   };
+
+  const openReport = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/report');
+      if (!res.ok) {
+        setReport({ path: '', text: 'No report yet. Reports are written when a run ends.' });
+        return;
+      }
+      setReport(await res.json());
+    } catch (e) {
+      setReport({ path: '', text: `Could not load the report: ${e.message}` });
+    }
+  };
+
+  const reportModal = report && (
+    <div className="report-overlay" onClick={() => setReport(null)}>
+      <div className="report-modal" onClick={e => e.stopPropagation()}>
+        <div className="report-header">
+          <span>End-of-run report</span>
+          <button className="btn-inline" onClick={() => setReport(null)}>Close</button>
+        </div>
+        {report.path && <div className="report-path">{report.path}</div>}
+        <pre className="report-text">{report.text}</pre>
+      </div>
+    </div>
+  );
 
   const handleStop = async () => {
     try {
@@ -524,6 +604,9 @@ function App() {
     if (stripped.startsWith('ACTION:')) return 'log-action';
     if (stripped.startsWith('EXECUTING:')) return 'log-executing';
     if (stripped.startsWith('PAUSED:')) return 'log-paused';
+    if (stripped.startsWith('CHECK:')) return 'log-check';
+    if (stripped.startsWith('FINDING:')) return 'log-finding';
+    if (stripped.startsWith('REPORT:') || stripped.startsWith('STATUS:')) return 'log-goal';
     return '';
   };
 
@@ -559,6 +642,18 @@ function App() {
     if (stripped.startsWith('ERROR:')) {
       return <><span className="log-ts">{ts}</span> <span className="log-tag tag-error">ERROR</span> {stripped.replace('ERROR: ', '')}</>;
     }
+    if (stripped.startsWith('CHECK:')) {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-check">CHECK</span> {stripped.replace('CHECK: ', '')}</>;
+    }
+    if (stripped.startsWith('FINDING:')) {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-finding">FINDING</span> {stripped.replace('FINDING: ', '')}</>;
+    }
+    if (stripped.startsWith('REPORT:')) {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-goal">REPORT</span> <button className="btn-inline" onClick={openReport}>View report</button></>;
+    }
+    if (stripped.startsWith('STATUS:')) {
+      return <><span className="log-ts">{ts}</span> <span className="log-tag tag-goal">GOAL</span> {stripped.replace('STATUS: ', '')}</>;
+    }
     return log;
   };
 
@@ -566,6 +661,8 @@ function App() {
   if (!isRunning) {
     return (
       <>
+        {reportModal}
+        {timerBanner}
         <div className="header-flex">
           <h1>Game AI Agent</h1>
           <div className="status-badge status-stopped">
@@ -607,6 +704,18 @@ function App() {
                   />
                 </>
               )}
+              {providerInfo?.optionalKey && (
+                <>
+                  <label>API Key <span style={{fontSize:'0.7rem', color:'var(--text-secondary)', fontWeight:'normal'}}>optional — leave empty to use ANTHROPIC_API_KEY or an `ant auth login` profile</span></label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    placeholder="sk-ant-..."
+                  />
+                </>
+              )}
 
               <label>
                 AI Model
@@ -627,7 +736,7 @@ function App() {
                 )}
                 {availableModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
-              {(providerInfo?.needsKey || provider === 'claude_code_cli' || provider === 'antigravity_cli') && (
+              {(providerInfo?.needsKey || provider === 'anthropic_api' || provider === 'claude_code_cli' || provider === 'antigravity_cli') && (
                 <>
                   <label>Or enter custom model ID</label>
                   <input
@@ -672,6 +781,31 @@ function App() {
                 {ROLES.map(r => <option key={r.id} value={r.id}>{r.label} — {r.desc}</option>)}
               </select>
 
+              <label>Screen Capture</label>
+              <select value={captureMode} onChange={e => setCaptureMode(e.target.value)}>
+                <option value="auto">Auto — window capture; switches to screen capture for streaming apps (GeForce NOW)</option>
+                <option value="screen">Screen — capture the screen area (use if the preview is black or frozen)</option>
+              </select>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={dualFrame} onChange={e => setDualFrame(e.target.checked)} />
+                Send two frames per step
+                <span style={{ fontSize: '0.8em', opacity: 0.7 }}>(second screenshot ~0.4 s later so blinking/animated cues like the active unit are visible — about 2× image cost)</span>
+              </label>
+
+              <label>Time limit (minutes) <span style={{fontSize:'0.75rem', color:'var(--text-secondary)', fontWeight:'normal'}}>empty or 0 = no limit; the report is still written when it stops</span></label>
+              <input type="number" min="0" step="1" value={maxMinutes}
+                     onChange={e => setMaxMinutes(e.target.value)} placeholder="e.g. 30" />
+              {Number(maxMinutes) > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={closeAfterLimit} onChange={e => setCloseAfterLimit(e.target.checked)} />
+                  Close the game window
+                  <input type="number" min="0" step="1" value={closeAfterMinutes} style={{ width: '4.5rem' }}
+                         onChange={e => setCloseAfterMinutes(e.target.value)} disabled={!closeAfterLimit} />
+                  minutes after the limit (e.g. end the GeForce NOW session)
+                </label>
+              )}
+
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                 <input type="checkbox" checked={useGrounding} onChange={e => setUseGrounding(e.target.checked)} />
                 Visual Grounding
@@ -705,8 +839,9 @@ function App() {
                 >
                   Start Agent
                 </button>
+                <button className="btn-inline" onClick={openReport}>View latest report</button>
               </div>
-              {providerInfo?.needsKey && (
+              {(providerInfo?.needsKey || providerInfo?.optionalKey) && (
                 <div style={{marginTop:'0.75rem', fontSize:'0.75rem', color:'var(--text-secondary)'}}>
                   API costs will be tracked and displayed during the session.
                 </div>
@@ -869,6 +1004,8 @@ function App() {
   // ─── RUNNING VIEW (agent active) ───
   return (
     <div className="running-layout">
+      {reportModal}
+      {timerBanner}
       {/* Session cost badge (paid providers only) */}
       {sessionCost && sessionCost.call_count > 0 && (
         <div className="cost-badge">

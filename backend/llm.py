@@ -12,6 +12,14 @@ try:
 except ImportError:
     _requests = None
 
+try:
+    import anthropic as _anthropic_sdk
+except ImportError:
+    _anthropic_sdk = None
+
+# Direct Anthropic Messages API (official SDK), the fast path for real-time play.
+ANTHROPIC_PROVIDER = "anthropic_api"
+
 SYSTEM_PROMPT = """
 You are an autonomous AI playing a video game via screenshot analysis and synthetic input.
 
@@ -81,7 +89,9 @@ ROLE_PROMPTS = {
         "- In your narration, note both positives and negatives you observe (controls, feedback, readability, pacing).\n"
         "- Comment on how intuitive the UI is, whether instructions are clear, and if mechanics feel fair.\n"
         "- Periodically include a brief evaluative note, e.g. 'The card tooltip placement obscures the board here.'\n"
-        "- Still play to make progress — a reviewer needs to experience the game, not stall."
+        "- Still play to make progress — a reviewer needs to experience the game, not stall.\n"
+        "- Record what you experience as findings (positives too). Do not spend steps reproducing problems;\n"
+        "  if a problem might be your own input mistake, say so in the finding and set confirmed=false."
     ),
     "tester": (
         "ROLE: QA Tester — You are testing this game for bugs, glitches, and edge cases.\n"
@@ -90,7 +100,10 @@ ROLE_PROMPTS = {
         "- In your narration, log anything unusual: visual glitches, misaligned elements, unresponsive buttons, text overflow.\n"
         "- Note the reproduction steps for any issue you find.\n"
         "- Alternate between normal gameplay and deliberate edge-case probing.\n"
-        "- If something looks like a bug, try to reproduce it before moving on."
+        "- Finding bugs is the goal. When something looks like a bug, first rule out your own input mistake:\n"
+        "  reproduce it once with a different input (keyboard instead of mouse, clicking the exact centre).\n"
+        "  Report it with confirmed=true only after it reproduced; otherwise confirmed=false.\n"
+        "- Record every issue as a finding with numbered repro steps in its details."
     ),
     "speedrunner": (
         "ROLE: Speedrunner — You are trying to complete the game as fast as possible.\n"
@@ -129,9 +142,7 @@ IF THE SCREEN SHOWS A PROMPT, DIALOG, OR SELECTION SCREEN:
 - Then return the remaining planned actions with updated coordinates
 
 COMMANDS (prefer keyboard over mouse when possible):
-- press key / hold_key / release_key / type
-- click / right_click / double_click / drag / scroll / hover
-- wait seconds
+{commands_list_short}
 - run_macro macro_name
 
 RULES:
@@ -216,6 +227,54 @@ Your job is to:
 Keep your directive concise (3-8 sentences). Focus on WHAT to do, not HOW to format it.
 """
 
+# Shared by the Worker and Combined prompts: the agent judges whether its
+# previous actions worked from the new screenshot (GCA-001) instead of the
+# harness guessing from pixel diffs.
+STEP_CHECK_RULES = """
+CHECKING YOUR PREVIOUS STEP:
+- The request may include "PREVIOUS STEP", listing the actions you sent last time, what you expected each one to do,
+  and how the harness ran them (ok / blocked / screen changed or not).
+- Look at the CURRENT screenshot and say in "last_step_check" which expectations came true and which did not.
+  A hover, tooltip or button highlight counts as success when it is visible now, even if the screen barely changed.
+- "progress": true if the game moved closer to the current goal since the previous step, false if it did not.
+- Do not repeat an action that already did what you wanted. If an action failed, try a different approach.
+- Give every action an "expect": the visible result you expect (e.g. "Path tool highlighted, tooltip shown").
+
+GOALS AND FINDINGS:
+- The request may include a GOALS checklist. Work on the CURRENT goal. Set "goal_done": true only when the
+  screenshot shows the current goal is complete.
+- The checklist was planned before the game was visible and can be wrong. If the current or upcoming goals do
+  not fit the game you now see (mechanics that don't exist here, a different objective shown on screen), put a
+  corrected list of the REMAINING goals in "goals_update" (3-8 goals, each one checkable thing). Otherwise [].
+- "findings": things worth reporting from this step (can be empty). Each finding has a type
+  (bug / ux / positive / note), a severity (low / medium / high), a short title, details, and "confirmed".
+  Only record something new and notable — at most 2 findings per step, usually 0. Never repeat anything in the
+  RECORDED FINDINGS list.
+
+RUN NOTEBOOK:
+- The request includes a RUN NOTEBOOK: facts you learned earlier in THIS run. Read it before planning and follow it.
+- Put new facts in "notes_add" (0-3 short sentences per step): controls that worked or failed ("units move with
+  two clicks: first shows the path, second confirms"), game rules, and what the game's own messages said
+  ("Cannot recruit: a hero is already in this town"). Copy rule-like game messages almost word for word.
+  Never add pixel coordinates, and never repeat a note that is already in the notebook.
+
+BEFORE ACTING:
+- "actor_now": in turn-based games, say who acts right now and with what (e.g. "my turn — Centaurs (active stack)",
+  "enemy turn — wait"). Plan only for the actor that is actually active. Use "" for games without turns.
+- When you are not sure what a click will do, check what the game says it will do first: hover the target and read
+  the status line, tooltip or cursor shape, or open its info panel (often right-click). Then act.
+
+AIMING:
+- Red numbered crosshairs on the screenshot (if any) show where your previous step's mouse actions landed;
+  the number is the action's number in PREVIOUS STEP. If one missed its target, correct by that offset.
+- If a click missed twice, use click_text for labelled buttons, or zoom first and click from the zoomed view.
+
+EFFICIENCY:
+- Hover only when you need to read a tooltip; do not hover before every click.
+- Avoid "wait": the harness already lets the screen settle after each action. Waits are capped at 2 seconds.
+- Plan several actions per step when the screen will not change in between (e.g. play a whole turn).
+"""
+
 WORKER_AGENT_PROMPT = """
 You are the Worker Agent — a precise input-command generator for an autonomous game-playing system.
 
@@ -224,12 +283,20 @@ OUTPUT: JSON only. No markdown, no backticks, no text outside the JSON.
 
 FORMAT:
 {
+  "last_step_check": "Which of the previous step's expectations are visible now and which are not.",
+  "progress": true,
+  "goal_done": false,
+  "goals_update": [],
+  "notes_add": ["Short new fact learned this step"],
+  "actor_now": "",
+  "findings": [{"type": "ux", "severity": "low", "title": "Short title", "details": "What happened", "confirmed": false}],
   "narration": "Brief description of what you're doing and why.",
   "actions": [
-    {"command": "press enter", "reason": "Confirm selection"},
-    {"command": "click 750 400", "reason": "Click the target element"}
+    {"command": "press enter", "reason": "Confirm selection", "expect": "Dialog closes"},
+    {"command": "click 750 400", "reason": "Click the target element", "expect": "Element turns highlighted"}
   ]
 }
+""" + STEP_CHECK_RULES + """
 
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc).
@@ -239,13 +306,19 @@ COMMANDS (prefer keyboard over mouse when possible):
 - drag x1 y1 x2 y2 — click-hold, move, release.
 - scroll x y amount — mouse wheel (positive=up, negative=down).
 - hover x y — move cursor without clicking.
+- click_text label — click the visible text "label" (button or menu item); the harness finds it on screen with OCR.
+  Most reliable way to press labelled buttons. Falls back to nothing if the text can't be read — then use click.
+- zoom x1 y1 x2 y2 — see that region enlarged in the NEXT screenshot (labels stay in full-screen coordinates).
+  Use it on a SMALL area (under 480 px wide) before clicking small or crowded targets, or when a click missed. Put it last in the step.
 - wait seconds — pause (decimal ok). ONLY when the game needs time.
 - run_macro macro_name — run a pre-recorded sequence.
 - save_memory text — save a useful discovery (hotkey, strategy, game mechanic) for future sessions.
   Example: save_memory In Slay The Spire, press 1-9 to select cards. Press E to end turn.
+  Save facts, never pixel coordinates (they go stale when windows move).
+  To correct an earlier memory, start with its id: save_memory replaces=<id> corrected text.
 
 COORDINATE PRECISION:
-- The screenshot is always 1280x720 pixels.
+- Coordinates are pixels in the screenshot; its exact size is given in the request.
 - Use the yellow rulers to measure the EXACT center of elements. Always cross-reference.
 
 RULES:
@@ -264,18 +337,26 @@ You are an autonomous game-playing AI that analyzes screenshots and generates pr
 INPUT: A screenshot of the current game state with YELLOW COORDINATE RULERS on all four edges.
 OUTPUT: Valid JSON only. No markdown, no backticks, no text outside the JSON.
 
-STEP 1 — ANALYZE: Identify the game, describe the current state, and decide on a strategy.
-STEP 2 — GENERATE COMMANDS: Produce precise input commands to execute that strategy.
+STEP 1 — CHECK: Compare the screenshot with what your previous actions were expected to do.
+STEP 2 — ANALYZE: Identify the game, describe the current state, and decide on a strategy.
+STEP 3 — GENERATE COMMANDS: Produce precise input commands to execute that strategy.
 
 FORMAT:
-{{
+{
+  "last_step_check": "Which of the previous step's expectations are visible now and which are not.",
+  "progress": true,
+  "goal_done": false,
+  "goals_update": [],
+  "notes_add": ["Short new fact learned this step"],
+  "actor_now": "",
+  "findings": [{"type": "ux", "severity": "low", "title": "Short title", "details": "What happened", "confirmed": false}],
   "narration": "What game this is, what you see, and what you plan to do (2-5 sentences).",
   "actions": [
-    {{"command": "press enter", "reason": "Confirm selection"}},
-    {{"command": "click 750 400", "reason": "Click the target element"}}
+    {"command": "press enter", "reason": "Confirm selection", "expect": "Dialog closes"},
+    {"command": "click 750 400", "reason": "Click the target element", "expect": "Element turns highlighted"}
   ]
-}}
-
+}
+""" + STEP_CHECK_RULES + """
 COMMANDS (prefer keyboard over mouse when possible):
 - press key — single key tap (enter, escape, space, tab, e, 1, 2, f5, etc).
 - hold_key / release_key key — modifier hold/release (shift, ctrl, alt). Always pair them.
@@ -284,12 +365,18 @@ COMMANDS (prefer keyboard over mouse when possible):
 - drag x1 y1 x2 y2 — click-hold, move, release.
 - scroll x y amount — mouse wheel (positive=up, negative=down).
 - hover x y — move cursor without clicking.
+- click_text label — click the visible text "label" (button or menu item); the harness finds it on screen with OCR.
+  Most reliable way to press labelled buttons. Falls back to nothing if the text can't be read — then use click.
+- zoom x1 y1 x2 y2 — see that region enlarged in the NEXT screenshot (labels stay in full-screen coordinates).
+  Use it on a SMALL area (under 480 px wide) before clicking small or crowded targets, or when a click missed. Put it last in the step.
 - wait seconds — pause (decimal ok). ONLY when the game needs time.
 - run_macro macro_name — run a pre-recorded sequence.
 - save_memory text — save a useful discovery (hotkey, strategy, game mechanic) for future sessions.
+  Save facts, never pixel coordinates (they go stale when windows move).
+  To correct an earlier memory, start with its id: save_memory replaces=<id> corrected text.
 
 COORDINATE PRECISION:
-- The screenshot is always 1280x720 pixels.
+- Coordinates are pixels in the screenshot; its exact size is given in the request.
 - Use the yellow rulers to measure the EXACT center of elements. Always cross-reference.
 
 RULES:
@@ -313,8 +400,123 @@ MODEL_PRICING = {
     "openai/gpt-4o-mini": (0.15, 0.60),
     "google/gemini-2.5-flash-preview": (0.15, 0.60),
     "google/gemini-2.5-pro-preview": (1.25, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
+    "anthropic/claude-haiku-5.5": (0.10, 0.50),
+    "anthropic/claude-sonnet-5.5": (2.00, 10.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+}
+
+# Cache reads/writes relative to the input price (Anthropic API).
+CACHE_READ_FACTOR = 0.1
+CACHE_WRITE_FACTOR = 1.25
+
+# Models offered for the direct Anthropic API provider (fastest first).
+ANTHROPIC_MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+
+# JSON schema for one planning step (structured output on the Anthropic API).
+STEP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "last_step_check": {"type": "string"},
+        "progress": {"type": "boolean"},
+        "goal_done": {"type": "boolean"},
+        "goals_update": {"type": "array", "items": {"type": "string"}},
+        "notes_add": {"type": "array", "items": {"type": "string"}},
+        "actor_now": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["bug", "ux", "positive", "note"]},
+                    "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "title": {"type": "string"},
+                    "details": {"type": "string"},
+                    "confirmed": {"type": "boolean"},
+                },
+                "required": ["type", "severity", "title", "details", "confirmed"],
+                "additionalProperties": False,
+            },
+        },
+        "narration": {"type": "string"},
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "expect": {"type": "string"},
+                },
+                "required": ["command", "reason", "expect"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["last_step_check", "progress", "goal_done", "goals_update", "notes_add", "actor_now",
+                 "findings", "narration", "actions"],
+    "additionalProperties": False,
 }
 DEFAULT_PRICING = (1.00, 3.00)  # conservative fallback
+
+# Stronger model used for a step when the agent is stuck (GCA-009).
+ESCALATION_MODELS = {
+    "anthropic_api": "claude-sonnet-5-5",
+    "claude_code_cli": "sonnet",
+    "openrouter": "anthropic/claude-sonnet-5.5",
+}
+
+
+def escalation_model(provider: str, model_name: str) -> str:
+    """Model to plan with when stuck; the current model when none is known
+    or it already is the stronger one."""
+    return ESCALATION_MODELS.get(provider, model_name)
+
+
+GOAL_PLAN_PROMPT = """
+You are planning a play session for an autonomous game-playing agent.
+{role_instructions}
+
+Split the user's instructions below into 3 to 8 ordered goals the agent can check off one at a time,
+using the attached screenshot for context. Each goal must be concrete and visibly checkable on screen.
+Each goal is ONE thing: when the instructions list several things to do or build ("paths, a lift and a
+building"), make each of them its own goal. Do not add goals for narrating or note-taking — the agent
+always does that.
+Keep the user's own wording where possible. If the instructions are a single long objective
+(e.g. "win a run"), split it into its natural stages.
+
+Return JSON only: {{"goals": ["first goal", "second goal"]}}
+
+USER INSTRUCTIONS:
+{instructions}
+"""
+
+REPORT_PROMPTS = {
+    "tester": "Write a QA bug report. Group confirmed bugs (reproduced) and unconfirmed issues separately, "
+              "each with severity, numbered repro steps, expected vs actual, and the screenshot file name. "
+              "Then list UX issues, then goal coverage (what was tested, what was skipped and why).",
+    "reviewer": "Write a mock review for a games website: title, one-line verdict, score out of 10, then sections "
+                "First impressions, Gameplay, Interface and controls, Look and feel, What needs work, Verdict. "
+                "600-900 words. Say plainly where something may have been your own input mistake.",
+    "gamer": "Write a short run summary: outcome, key decisions and turning points, what went well, what went wrong, "
+             "and what to do differently next time.",
+    "speedrunner": "Write a short speedrun summary: outcome, route taken, time and steps used, time losses, "
+                   "and route improvements.",
+    "explorer": "Write an exploration log: areas and systems discovered, secrets or oddities, and what remains unexplored.",
+}
+
+REPORT_PROMPT = """
+You just finished an automated play session of a game. Write the report below in Markdown, based ONLY on the
+session data. Do not invent anything that is not in the data.
+
+REPORT TO WRITE: {report_kind}
+
+USER INSTRUCTIONS FOR THE SESSION:
+{instructions}
+
+{session_data}
+"""
 
 # Providers that shell out to a local, pre-authenticated CLI binary.
 # No API key and no `requests` dependency required — each CLI uses its
@@ -358,19 +560,25 @@ class CostTracker:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
+        self.cache_read_tokens = 0
         self.call_count = 0
         self.max_budget_usd = max_budget_usd
 
-    def record(self, input_tokens: int, output_tokens: int, model_name: str):
+    def record(self, input_tokens: int, output_tokens: int, model_name: str,
+               cache_read_tokens: int = 0, cache_write_tokens: int = 0):
         # Prevent API calls if we are already at or over budget
         if self.max_budget_usd > 0.0 and self.total_cost_usd >= self.max_budget_usd:
             raise BudgetExceededException(f"Budget exceeded: {self.total_cost_usd:.4f} >= {self.max_budget_usd:.4f}")
 
-        self.total_input_tokens += input_tokens
+        self.total_input_tokens += input_tokens + cache_read_tokens + cache_write_tokens
         self.total_output_tokens += output_tokens
+        self.cache_read_tokens += cache_read_tokens
         self.call_count += 1
         pricing = MODEL_PRICING.get(model_name, DEFAULT_PRICING)
-        cost = (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+        cost = (input_tokens * pricing[0]
+                + cache_read_tokens * pricing[0] * CACHE_READ_FACTOR
+                + cache_write_tokens * pricing[0] * CACHE_WRITE_FACTOR
+                + output_tokens * pricing[1]) / 1_000_000
         self.total_cost_usd += cost
 
         # After updating, check if we crossed the limit
@@ -381,6 +589,7 @@ class CostTracker:
         return {
             "input_tokens": self.total_input_tokens,
             "output_tokens": self.total_output_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
             "total_cost_usd": round(self.total_cost_usd, 6),
             "call_count": self.call_count,
         }
@@ -400,7 +609,19 @@ class LLMIntegration:
         self._using_secondary = False  # tracks which key is active
         self.cost = CostTracker(max_budget_usd)
         self.turn_count = 0
-        if provider not in CLI_PROVIDERS and _requests is None:
+        self.two_call = False  # Lead/Worker split for API providers (off: one call per step)
+        self._extra_image = None  # optional second frame for the current planning call (GCA-025)
+        self._anthropic = None
+        if provider == ANTHROPIC_PROVIDER:
+            if _anthropic_sdk is None:
+                raise ImportError("'anthropic' package is required for the Anthropic API provider. "
+                                  "Install with: pip install anthropic")
+            # No key from the dashboard → the SDK resolves ANTHROPIC_API_KEY,
+            # ANTHROPIC_AUTH_TOKEN or an `ant auth login` profile.
+            key = api_key if api_key and api_key != "local-cli" else None
+            self._anthropic = (_anthropic_sdk.Anthropic(api_key=key, timeout=60.0) if key
+                               else _anthropic_sdk.Anthropic(timeout=60.0))
+        elif provider not in CLI_PROVIDERS and _requests is None:
             raise ImportError("'requests' package is required for API providers. "
                               "Install with: pip install requests")
 
@@ -423,8 +644,73 @@ class LLMIntegration:
         """Route to the configured provider."""
         if self.provider in CLI_PROVIDERS:
             return self._call_cli(prompt_text, image_base64, model_name, expect_json=expect_json)
+        elif self.provider == ANTHROPIC_PROVIDER:
+            return self._call_anthropic("", prompt_text, image_base64, model_name, expect_json=expect_json)
         else:
             return self._call_api(prompt_text, image_base64, model_name, expect_json=expect_json)
+
+    # ── Anthropic API (direct, fast) ──
+
+    def _call_anthropic(self, static_text: str, dynamic_text: str, image_base64: str,
+                        model_name: str, expect_json: bool = True, schema: dict = None):
+        """One Messages API call with the screenshot inline.
+
+        static_text (system prompt, role, game instructions) goes in a cached
+        system block so repeated steps only pay full price for the dynamic
+        part (history, memories, previous step). `schema` turns on structured
+        output so the reply is guaranteed to parse.
+        """
+        if self.cost.max_budget_usd > 0.0 and self.cost.total_cost_usd >= self.cost.max_budget_usd:
+            raise BudgetExceededException(f"Budget exceeded: {self.cost.total_cost_usd:.4f} >= {self.cost.max_budget_usd:.4f}")
+
+        kwargs = {}
+        if static_text:
+            kwargs["system"] = [{"type": "text", "text": static_text,
+                                 "cache_control": {"type": "ephemeral"}}]
+        output_config = {"effort": "low"}  # latency matters more than depth per step
+        if schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+
+        t0 = time.time()
+        response = self._anthropic.messages.create(
+            model=model_name,
+            max_tokens=8000,
+            output_config=output_config,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                 "data": image_base64}},
+                    *([{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": self._extra_image}}] if self._extra_image else []),
+                    {"type": "text", "text": dynamic_text},
+                ],
+            }],
+            **kwargs,
+        )
+        elapsed = time.time() - t0
+
+        if response.stop_reason == "refusal":
+            category = getattr(response.stop_details, "category", None) if response.stop_details else None
+            raise ValueError(f"model declined the request (refusal, category={category})")
+        content = next((b.text for b in response.content if b.type == "text"), "")
+
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        result = self._extract_json(content) if expect_json else content
+        try:
+            self.cost.record(usage.input_tokens, usage.output_tokens, model_name,
+                             cache_read_tokens=cache_read, cache_write_tokens=cache_write)
+        except BudgetExceededException as e:
+            e.partial_result = result
+            raise
+        print(f"  [api] anthropic {model_name}  in={usage.input_tokens} cache_read={cache_read} "
+              f"cache_write={cache_write} out={usage.output_tokens}  {elapsed:.1f}s  "
+              f"session=${self.cost.total_cost_usd:.4f}")
+        if response.stop_reason == "max_tokens":
+            print("  [api] WARNING: response hit max_tokens")
+        return result
 
     # ── Gemini CLI (free, default) ──
 
@@ -432,6 +718,7 @@ class LLMIntegration:
     # Overwritten each call; no accumulation of temp files.
     _cli_tmp_dir = os.path.join(os.path.dirname(__file__), "..", ".tmp")
     _cli_img_path = os.path.join(_cli_tmp_dir, "_screenshot.jpg")
+    _cli_img2_path = os.path.join(_cli_tmp_dir, "_screenshot2.jpg")
     _cli_prompt_path = os.path.join(_cli_tmp_dir, "_prompt.txt")
 
     def _extract_json(self, text: str) -> dict:
@@ -480,6 +767,9 @@ class LLMIntegration:
         # Write image (skip if caller says it's already there)
         if not reuse_image:
             img_data = base64.b64decode(image_base64)
+            if self._extra_image:
+                with open(self._cli_img2_path, 'wb') as f2:
+                    f2.write(base64.b64decode(self._extra_image))
             with open(self._cli_img_path, 'wb') as f:
                 f.write(img_data)
 
@@ -491,6 +781,8 @@ class LLMIntegration:
             rel_img = os.path.relpath(self._cli_img_path, workspace_root)
             rel_prompt = os.path.relpath(self._cli_prompt_path, workspace_root)
             full_prompt = f"Analyze this image: @{rel_img}. Task instructions: @{rel_prompt}"
+            if self._extra_image:
+                full_prompt += f" Second frame, a moment later: @{os.path.relpath(self._cli_img2_path, workspace_root)}"
             cmd = ["gemini", "-p", full_prompt, "--model", model_name]
             use_shell = True
             timeout = 120
@@ -502,6 +794,8 @@ class LLMIntegration:
             prompt_abs = os.path.abspath(self._cli_prompt_path).replace("\\", "/")
             full_prompt = (
                 f"Use your file-reading tool to view the screenshot image at \"{img_abs}\" "
+                + (f"and the second frame (taken a moment later) at \"{os.path.abspath(self._cli_img2_path)}\" "
+                   if self._extra_image else "") +
                 f"and to read the task instructions at \"{prompt_abs}\". "
                 f"Then follow those instructions exactly. "
                 f"Your final reply must contain ONLY the raw JSON object — no prose, no markdown."
@@ -539,7 +833,8 @@ class LLMIntegration:
             cmd,
             input=stdin,
             cwd=workspace_root,
-            capture_output=True, text=True, check=True,
+            # CLIs print UTF-8; the Windows default codepage turns "—" into "â€”"
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
             shell=use_shell,
             timeout=timeout
         )
@@ -555,7 +850,8 @@ class LLMIntegration:
 
     # ── API providers (Gemini API / OpenRouter) ──
 
-    def _call_api(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True):
+    def _call_api(self, prompt_text: str, image_base64: str, model_name: str, expect_json: bool = True,
+                  schema: dict = None):
         """Call an OpenAI-compatible chat completions API.
         Works for both Gemini API and OpenRouter.
         """
@@ -580,12 +876,21 @@ class LLMIntegration:
                     {"type": "text", "text": prompt_text},
                     {"type": "image_url", "image_url": {
                         "url": f"data:image/jpeg;base64,{image_base64}"
-                    }}
+                    }},
+                    # optional second frame, after the main one (GCA-025)
+                    *([{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{self._extra_image}"}}]
+                      if self._extra_image else []),
                 ]
             }],
-            "max_tokens": 4096,
+            "max_tokens": 8000,
             "temperature": 0.7,
         }
+        # Structured output where the provider supports it, so a model can't
+        # answer with tool-call XML instead of the step JSON. Dropped again
+        # if the provider rejects it (HTTP 400).
+        if schema is not None and self.provider == "openrouter":
+            body["response_format"] = {"type": "json_schema",
+                                       "json_schema": {"name": "agent_step", "strict": True, "schema": schema}}
 
         # Retry transient errors with exponential backoff
         RETRYABLE = {429, 500, 502, 503, 504}
@@ -623,6 +928,10 @@ class LLMIntegration:
                     active_key = self.secondary_api_key
                     self._using_secondary = True
                     continue  # retry immediately with secondary key
+                if resp is not None and resp.status_code == 400 and "response_format" in body:
+                    print("  [api] 400 with structured output — retrying without response_format")
+                    body.pop("response_format")
+                    continue
                 if resp is not None and resp.status_code in RETRYABLE and attempt < MAX_API_RETRIES:
                     wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
                     print(f"  [api] {resp.status_code} on attempt {attempt+1}, "
@@ -685,9 +994,24 @@ class LLMIntegration:
 
     def get_next_action(self, image_base64: str, game_instructions: str, model_name: str = "gemini-3-flash-preview",
                         role: str = "gamer", grounding_text: str = "", enabled_tools: list = None,
-                        step_history: str = "", memories_text: str = ""):
+                        step_history: str = "", memories_text: str = "", last_step: str = "",
+                        image_size: tuple = None, goals_text: str = "", stuck_text: str = "",
+                        view_note: str = "", extra_image_b64: str = None, notebook_text: str = ""):
+        """Plan one step. `last_step` describes the previous step's actions,
+        their expected results and how they ran, so the model can judge them
+        against the new screenshot (GCA-001)."""
+        self._extra_image = extra_image_b64
         try:
             self.turn_count += 1
+            if notebook_text:
+                goals_text = "\n\n".join(filter(None, [notebook_text, goals_text]))
+            if extra_image_b64:
+                view_note = "\n".join(filter(None, [view_note, (
+                    "TWO FRAMES: you get two screenshots taken about 0.4 s apart (the first one has the rulers and "
+                    "markers). Things that differ between them are animations — a blinking active unit, a pulsing "
+                    "valid move, a moving cursor or an incoming effect. Use that to tell what is active right now.")]))
+            size_line = (f"Screenshot size: {image_size[0]}x{image_size[1]} pixels.\n"
+                         if image_size else "")
             role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
 
             # Load dynamic tools from tools.json if available (PR #11: Dynamic Tools Registry)
@@ -710,10 +1034,13 @@ class LLMIntegration:
             # ── CLI fast-path: single combined call ──
             # The CLI spawns a subprocess per call, so merging Lead+Worker
             # into one call saves ~50% of the per-step latency.
-            if self.provider in CLI_PROVIDERS:
+            # One combined call per step for every provider unless the
+            # two-call Lead/Worker split is switched on (GCA-013).
+            if not self.two_call or self.provider in CLI_PROVIDERS or self.provider == ANTHROPIC_PROVIDER:
                 return self._get_next_action_combined(
                     image_base64, game_instructions, model_name, role_instructions,
-                    grounding_text, extra_commands, step_history, memories_text)
+                    grounding_text, extra_commands, step_history, memories_text,
+                    last_step, size_line, goals_text, stuck_text, view_note)
 
             # ── API path: two-call Lead+Worker (richer reasoning) ──
             # Phase 1: Lead Agent dictates strategy
@@ -731,8 +1058,11 @@ class LLMIntegration:
             if step_history:
                 lead_full_prompt += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
                 lead_full_prompt += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
+            if last_step:
+                lead_full_prompt += f"\n{last_step}\n"
             if self.turn_count % 5 == 0:
                 lead_full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
+            lead_full_prompt += size_line
             lead_full_prompt += "Please analyze the attached screenshot image and provide your strategic directive."
 
             directive = self._call(lead_full_prompt, image_base64, model_name, expect_json=False)
@@ -744,6 +1074,9 @@ class LLMIntegration:
             )
             if extra_commands:
                 worker_full_prompt += f"\nAdditional available commands:{extra_commands}\n"
+            if last_step:
+                worker_full_prompt += f"\n{last_step}\n"
+            worker_full_prompt += size_line
             worker_full_prompt += (
                 f"\nLead Agent's Directive:\n{directive}\n\n"
                 f"Please analyze the attached screenshot image and the Lead Agent's directive to generate the JSON input commands."
@@ -771,35 +1104,91 @@ class LLMIntegration:
         except Exception as e:
             print(f"Error in LLM integration: {e}")
             return {"narration": f"Error: {e}", "actions": []}
+        finally:
+            self._extra_image = None
 
     def _get_next_action_combined(self, image_base64: str, game_instructions: str,
                                    model_name: str, role_instructions: str,
                                    grounding_text: str, extra_commands: str,
-                                   step_history: str, memories_text: str):
-        """Single-call path for CLI mode — merges Lead+Worker into one subprocess call.
-        Cuts per-step latency roughly in half compared to two sequential CLI calls."""
+                                   step_history: str, memories_text: str,
+                                   last_step: str = "", size_line: str = "",
+                                   goals_text: str = "", stuck_text: str = "", view_note: str = ""):
+        """Single-call path (CLI providers and the Anthropic API): check the
+        previous step, plan and generate commands in one model call.
+
+        The prompt is split into a static part (instructions, role, game
+        goal, commands) that stays byte-identical between steps — so the
+        Anthropic API can cache it — and a dynamic part for this step."""
 
         prompt_template = COMBINED_AGENT_PROMPT.replace("{role_instructions}", role_instructions)
-        full_prompt = (
+        static = (
             f"SYSTEM INSTRUCTIONS:\n{prompt_template}\n\n"
             f"Game Instructions:\n{game_instructions}\n\n"
         )
-        if grounding_text:
-            full_prompt += f"\n{grounding_text}\n"
         if extra_commands:
-            full_prompt += f"\nAdditional available commands:{extra_commands}\n"
-        if memories_text:
-            full_prompt += f"\n{memories_text}\n"
-        if step_history:
-            full_prompt += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
-            full_prompt += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
-        if self.turn_count % 5 == 0:
-            full_prompt += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
-        full_prompt += "Please analyze the attached screenshot image and produce the JSON response."
+            static += f"\nAdditional available commands:{extra_commands}\n"
 
-        response = self._call_cli(full_prompt, image_base64, model_name, expect_json=True)
+        dynamic = ""
+        if grounding_text:
+            dynamic += f"\n{grounding_text}\n"
+        if memories_text:
+            dynamic += f"\n{memories_text}\n"
+        if step_history:
+            dynamic += f"\n=== RECENT STEP HISTORY (what you already tried) ===\n{step_history}\n=== END HISTORY ===\n"
+            dynamic += "IMPORTANT: Do NOT repeat actions that already failed or produced no progress. Try a different approach.\n\n"
+        if goals_text:
+            dynamic += f"\n{goals_text}\n"
+        if last_step:
+            dynamic += f"\n{last_step}\n"
+        if stuck_text:
+            dynamic += f"\n{stuck_text}\n"
+        if view_note:
+            dynamic += f"\n{view_note}\n"
+        if self.turn_count % 5 == 0:
+            dynamic += f"\n\nREMINDER - Core instructions: {game_instructions} | Role: {role_instructions}\n"
+        dynamic += size_line
+        dynamic += "Please analyze the attached screenshot image and produce the JSON response."
+
+        if self.provider == ANTHROPIC_PROVIDER:
+            response = self._call_anthropic(static, dynamic, image_base64, model_name,
+                                            expect_json=True, schema=STEP_SCHEMA)
+        elif self.provider in CLI_PROVIDERS:
+            response = self._call_cli(static + dynamic, image_base64, model_name, expect_json=True)
+        else:
+            try:
+                response = self._call_api(static + dynamic, image_base64, model_name,
+                                          expect_json=True, schema=STEP_SCHEMA)
+            except ValueError as e:
+                # No parsable JSON (e.g. the model wrote tool-call XML): ask once more.
+                print(f"  [api] unparsable step reply ({str(e)[:80]}) — retrying once")
+                response = self._call_api(
+                    static + dynamic + "\nYour previous reply was not valid JSON. Reply with ONLY the JSON object "
+                    "described in FORMAT — no tool calls, no XML, no prose.",
+                    image_base64, model_name, expect_json=True, schema=STEP_SCHEMA)
         print(f"  [combined_agent] narration: {response.get('narration', '')[:120]}...")
         return response
+
+    def plan_goals(self, image_base64: str, instructions: str, role: str, model_name: str) -> list:
+        """Split the user's instructions into ordered, checkable goals (GCA-010).
+        Game agnostic: the goals come only from the instructions and the screenshot."""
+        role_instructions = ROLE_PROMPTS.get(role, ROLE_PROMPTS[DEFAULT_ROLE])
+        prompt = GOAL_PLAN_PROMPT.format(role_instructions=role_instructions, instructions=instructions)
+        try:
+            result = self._call(prompt, image_base64, model_name, expect_json=True)
+            goals = [str(g).strip() for g in result.get("goals", []) if str(g).strip()]
+            return goals[:8]
+        except BudgetExceededException:
+            raise
+        except Exception as e:
+            print(f"[goals] planning failed: {e}")
+            return []
+
+    def write_report(self, image_base64: str, role: str, instructions: str, session_data: str,
+                     model_name: str) -> str:
+        """Write the role's end-of-run report from the session's findings (GCA-011)."""
+        prompt = REPORT_PROMPT.format(report_kind=REPORT_PROMPTS.get(role, REPORT_PROMPTS["gamer"]),
+                                      instructions=instructions, session_data=session_data)
+        return self._call(prompt, image_base64, model_name, expect_json=False)
 
     def retry_assist(self, image_base64: str, failed_cmd: str, failed_reason: str,
                      attempts: int, game_instructions: str, model_name: str):

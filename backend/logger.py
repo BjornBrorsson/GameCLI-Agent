@@ -17,13 +17,18 @@ class SessionLogger:
             f.write("This file contains the reasoning and narration for each step the agent takes.\n\n")
             f.write("---\n\n")
             
-    def log_step(self, step: int, narration: str, actions: list):
+    def log_step(self, step: int, narration: str, actions: list, check: str = "",
+                 progress=None):
         """
         Appends the step's narration and actions to the markdown file.
+        `check` is the model's verdict on the previous step's actions.
         """
         ts = datetime.now().strftime("%H:%M:%S")
         with open(self.filename, "a", encoding="utf-8") as f:
             f.write(f"### Step {step} — `{ts}`\n")
+            if check:
+                prog = "" if progress is None else (" (progress)" if progress else " (no progress)")
+                f.write(f"**Check of previous step{prog}:**\n> {check}\n\n")
             f.write(f"**Narration:**\n> {narration}\n\n")
             f.write("**Actions Taken:**\n")
             if not actions:
@@ -135,6 +140,9 @@ class ExecutionLogger:
     def log_pause_struggle(self, avg_attempts: float, max_attempts: int, failed: int):
         self.log(f"*** PAUSED — struggling: avg_attempts={avg_attempts:.1f}, "
                  f"max_attempts={max_attempts}, failed={failed} ***")
+
+    def log_pause_reason(self, reason: str):
+        self.log(f"*** PAUSED — {reason} ***")
 
     def log_resume(self):
         self.log(f"*** RESUMED by user ***")

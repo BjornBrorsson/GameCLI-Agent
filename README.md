@@ -41,6 +41,7 @@ backend/           Python (FastAPI + asyncio)
 - **Node.js 18+**
 - **Tesseract OCR** — [download installer](https://github.com/UB-Mannheim/tesseract/wiki). Install to the default path (`C:\Program Files\Tesseract-OCR\`)
 - **One of the following LLM providers:**
+  - Anthropic API — fastest option (one direct call per step, default `claude-haiku-5-5`); set `ANTHROPIC_API_KEY`, run `ant auth login`, or paste a key in the dashboard
   - [Claude Code CLI](https://claude.ai/code) installed and authenticated (free with your Claude plan; `irm https://claude.ai/install.ps1 | iex` on Windows) — **default**, uses Haiku
   - [Antigravity CLI](https://antigravity.google/) (`agy`) installed and authenticated (free)
   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated (free)

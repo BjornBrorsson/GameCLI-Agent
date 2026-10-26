@@ -28,7 +28,8 @@ from agent_loop import AgentLoop
 from screen_capture import ScreenCapture
 from macro_recorder import recorder
 from memories import MemoryStore
-from llm import find_cli_binary
+from reporting import latest_report
+from llm import find_cli_binary, ANTHROPIC_PROVIDER, ANTHROPIC_MODELS
 
 app = FastAPI()
 
@@ -60,6 +61,10 @@ class StartRequest(BaseModel):
     grounding_model: str = ""
     max_budget_usd: float = 0.0
     secondary_api_key: str = ""
+    capture_mode: str = "auto"  # auto | screen (streaming clients, overlays)
+    max_minutes: float = 0.0                 # stop the test after this long (0 = no limit)
+    close_target_after_minutes: float = -1.0 # close the game window this long after the limit (-1 = never)
+    dual_frame: bool = False                 # send a second frame ~0.4 s later (shows blinking/animated cues)
 
 class InstructionUpdate(BaseModel):
     instructions: str
@@ -142,7 +147,11 @@ async def start_agent(req: StartRequest):
         use_grounding=req.use_grounding,
         grounding_model=req.grounding_model,
         max_budget_usd=req.max_budget_usd,
-        secondary_api_key=req.secondary_api_key
+        secondary_api_key=req.secondary_api_key,
+        capture_mode=req.capture_mode,
+        max_minutes=req.max_minutes,
+        close_target_after_minutes=req.close_target_after_minutes,
+        dual_frame=req.dual_frame
     )
     return {"status": "success" if success else "error", "message": msg}
 
@@ -163,7 +172,8 @@ async def abort_agent():
 
 @app.get("/api/status")
 def get_status():
-    return {"is_running": agent.is_running, "is_paused": agent.is_paused, "is_recording_macro": recorder.recording}
+    return {"is_running": agent.is_running, "is_paused": agent.is_paused, "is_recording_macro": recorder.recording,
+            "timer": agent.timer_state}
 
 class MacroStartRequest(BaseModel):
     macro_name: str
@@ -329,6 +339,13 @@ def get_models(req: ModelsRequest):
     if req.provider == "antigravity_cli":
         return _fetch_agy_models()
 
+    if req.provider == ANTHROPIC_PROVIDER:
+        return {
+            "models": [{"id": m, "name": m + (" — fastest, default" if i == 0 else "")}
+                       for i, m in enumerate(ANTHROPIC_MODELS)],
+            "default": ANTHROPIC_MODELS[0],
+        }
+
     if _requests is None:
         return JSONResponse(status_code=500, content={"error": "requests package not installed"})
 
@@ -416,6 +433,14 @@ def _fetch_openrouter_models(api_key: str):
     default = "google/gemini-2.5-flash-preview" if any(m["id"] == "google/gemini-2.5-flash-preview" for m in models) else (models[0]["id"] if models else "")
     return {"models": models, "default": default}
 
+
+@app.get("/api/report")
+def get_report():
+    """Latest end-of-run report (written when a run ends)."""
+    report = latest_report()
+    if report is None:
+        return JSONResponse(status_code=404, content={"error": "No report yet"})
+    return report
 
 @app.get("/api/cost")
 def get_cost():

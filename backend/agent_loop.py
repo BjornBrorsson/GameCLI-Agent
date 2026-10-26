@@ -1,16 +1,16 @@
 import asyncio
+import re
 from typing import Callable, Optional
 from datetime import datetime
 import time
 import ctypes
 
-import pygetwindow as gw
-
-from screen_capture import ScreenCapture
-from input_controller import InputController, _send_button, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+from screen_capture import ScreenCapture, WindowNotFoundError, find_window, is_streaming_client, close_window
+from input_controller import InputController, set_target_window, set_streaming
+from text_locator import find_text
 from action_verifier import ActionVerifier
 from game_state import detect_phase, PHASE_TOOLS
-from llm import LLMIntegration, BudgetExceededException, is_cli_provider
+from llm import LLMIntegration, BudgetExceededException, is_cli_provider, escalation_model
 from logger import SessionLogger, ExecutionLogger, ConsoleLogger
 from safety import SafetyFilter
 from grounding import LLMGrounding
@@ -18,12 +18,27 @@ from experience_store import ExperienceStore
 from recipes import RecipeStore
 from session_state import SessionState
 from memories import MemoryStore
+from goals import GoalTracker
+from notebook import RunNotebook
+from reporting import FindingsLog
 
-# Struggle thresholds — pause agent if actions are taking too many retries
-# Average attempts > this means the agent is struggling (1.0 = every action first-try)
-STRUGGLE_AVG_THRESHOLD = 4.0
-# If ANY single action takes this many attempts, pause regardless of average
-STRUGGLE_MAX_THRESHOLD = 12
+# Progress, escalation and skipping are handled by GoalTracker (GCA-009/010).
+# Single "failed" actions never pause: the model judges each step itself.
+
+# Model-requested waits are capped (GCA-013): the harness already settles.
+MAX_MODEL_WAIT_S = 2.0
+
+# Zoom is for small targets; wider boxes are refused (GCA-014).
+MAX_ZOOM_BOX_W = 480
+
+# Keep findings notable: the model tends to log everything it sees.
+MAX_FINDINGS_PER_STEP = 2
+
+# Pixel-diff threshold used only as a hint to the model ("screen changed: yes/no").
+CHANGE_HINT_THRESHOLD = 0.004
+
+# Before each planning screenshot, wait up to this long for the screen to settle (GCA-007).
+SETTLE_TIMEOUT_S = 3.0
 
 class AgentLoop:
     def __init__(self):
@@ -31,7 +46,7 @@ class AgentLoop:
         self.is_paused = False
         self.task: Optional[asyncio.Task] = None
         self._resume_event: Optional[asyncio.Event] = None
-        
+
         self.llm = None  # set during start(); exposed for cost tracking
         self.screen_capture = ScreenCapture()
         self.input_controller = InputController()
@@ -41,6 +56,10 @@ class AgentLoop:
         self.recipes = RecipeStore()
         self.session_state = SessionState()
         self.memories = MemoryStore()
+        self._timer_task: Optional[asyncio.Task] = None
+        self.unattended = False  # timed run: refuse risky clicks instead of waiting for approval
+        self.dual_frame = False  # send a second frame ~0.4 s later so animations are visible (GCA-025)
+        self.timer_state: dict = {}  # {"stop_at": epoch} or {"close_at": epoch, "close_target": title}
 
     def resume(self):
         """Resume the agent after a pause."""
@@ -65,11 +84,8 @@ class AgentLoop:
         if target_type != "window":
             return
         try:
-            wins = gw.getWindowsWithTitle(target_name)
-            if not wins:
-                print(f"  [!] _focus_window: no window found matching '{target_name}'")
-                return
-            win = wins[0]
+            win = find_window(target_name)
+            set_target_window(win._hWnd)
             if win.isMinimized:
                 win.restore()
                 time.sleep(0.1)
@@ -92,26 +108,79 @@ class AgentLoop:
             print(f"  [focus] Activated window: '{win.title}'")
         except Exception as e:
             print(f"  [!] _focus_window error: {e}")
-        
+
+    @staticmethod
+    def _memory_game(target_type: str, target_name: str) -> str:
+        """Game name memories are filed under: the window title without
+        build tags such as '(DEBUG)'. Monitor targets get universal memories."""
+        if target_type != "window":
+            return ""
+        return re.sub(r"\s*[\(\[].*?[\)\]]\s*", " ", target_name).strip()
+
     def start(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
                provider: str = "gemini_cli", role: str = "gamer", use_grounding: bool = False,
                grounding_model: str = "", max_budget_usd: float = 0.0,
-               secondary_api_key: str = ""):
+               secondary_api_key: str = "", capture_mode: str = "auto",
+               max_minutes: float = 0.0, close_target_after_minutes: float = -1.0,
+               dual_frame: bool = False):
         if self.is_running:
             return False, "Agent is already running."
-            
+
         self.is_running = True
         self.llm = None  # will be set in _loop; exposed for cost tracking
-        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role, use_grounding, grounding_model, max_budget_usd, secondary_api_key))
+        self.dual_frame = bool(dual_frame)
+        self.task = asyncio.create_task(self._loop(api_key, target_type, target_name, model_name, game_instructions, emit_log, provider, role, use_grounding, grounding_model, max_budget_usd, secondary_api_key, capture_mode))
+        # A new run replaces any pending time limit / close from an earlier run.
+        if self._timer_task and not self._timer_task.done():
+            self._timer_task.cancel()
+        self.timer_state = {}
+        self.unattended = bool(max_minutes and max_minutes > 0)
+        if max_minutes and max_minutes > 0:
+            self._timer_task = asyncio.create_task(self._run_time_limit(
+                max_minutes, close_target_after_minutes, target_type, target_name, emit_log))
         return True, "Agent started."
-        
+
+    async def _run_time_limit(self, max_minutes: float, close_after_minutes: float,
+                              target_type: str, target_name: str, emit_log: Callable):
+        """Stop the run after `max_minutes` (the report is still written), then
+        optionally close the game window `close_after_minutes` later — e.g. to
+        end a GeForce NOW session instead of leaving it idling."""
+        stop_at = time.time() + max_minutes * 60
+        self.timer_state = {"stop_at": stop_at}
+        while time.time() < stop_at:
+            if not self.is_running:
+                self.timer_state = {}
+                return  # stopped by hand: no automatic close
+            await asyncio.sleep(1.0)
+        if not self.is_running:
+            self.timer_state = {}
+            return
+        print(f"[timer] {max_minutes:g}-minute limit reached — stopping the agent")
+        await emit_log(f"STATUS: Time limit of {max_minutes:g} minutes reached — stopping the test")
+        self.stop()
+        if close_after_minutes is None or close_after_minutes < 0 or target_type != "window":
+            self.timer_state = {}
+            return
+        close_at = time.time() + close_after_minutes * 60
+        self.timer_state = {"close_at": close_at, "close_target": target_name}
+        await emit_log(f"STATUS: Will close '{target_name}' in {close_after_minutes:g} minutes")
+        await asyncio.sleep(max(0.0, close_at - time.time()))
+        if self.is_running:  # a new run started on its own: leave the window alone
+            self.timer_state = {}
+            return
+        result = await asyncio.to_thread(close_window, target_name)
+        print(f"[timer] close '{target_name}': {result}")
+        await emit_log(f"STATUS: Closed '{target_name}' after the time limit ({result})")
+        self.timer_state = {}
+
     def stop(self):
         if not self.is_running:
             return False, "Agent is not running."
-            
+
         self.is_running = False
         if self.is_paused and self._resume_event:
             self._resume_event.set()
+        self.is_paused = False  # a stop while paused left the dashboard showing "paused"
         if self.task:
             self.task.cancel()
         return True, "Agent stopped."
@@ -123,6 +192,10 @@ class AgentLoop:
             return action.get("command", ""), action.get("reason", ""), action.get("precondition", ""), action.get("wait_after_condition", "")
         # Fallback for plain string actions
         return str(action), "", "", ""
+
+    @staticmethod
+    def _action_expect(action) -> str:
+        return action.get("expect", "") if isinstance(action, dict) else ""
 
     async def _wait_for_stable(self, target_type: str, target_name: str,
                                timeout: float = 4.0, interval: float = 0.5) -> bool:
@@ -148,10 +221,31 @@ class AgentLoop:
                 prev_hash = cur_hash
         return False
 
+    @staticmethod
+    def _format_last_step(step: int, results: list, overall_changed: bool, still_changing: bool) -> str:
+        """Describe the previous step for the next planning call, so the model
+        can judge each action against the new screenshot."""
+        if not results:
+            return ""
+        lines = [f"=== PREVIOUS STEP (step {step}) — check these against the CURRENT screenshot ==="]
+        for i, (cmd, reason, expect, outcome) in enumerate(results, 1):
+            line = f"{i}. {cmd}"
+            if reason:
+                line += f" — {reason}"
+            if expect:
+                line += f"\n   expected: {expect}"
+            line += f"\n   harness: {outcome}"
+            lines.append(line)
+        lines.append(f"Whole screen changed during the step: {'yes' if overall_changed else 'no'}")
+        if still_changing:
+            lines.append("Note: the screen was still animating when this screenshot was taken.")
+        lines.append("=== END PREVIOUS STEP ===")
+        return "\n".join(lines)
+
     async def _loop(self, api_key: str, target_type: str, target_name: str, model_name: str, game_instructions: str, emit_log: Callable,
                      provider: str = "gemini_cli", role: str = "gamer", use_grounding: bool = False,
                      grounding_model: str = "", max_budget_usd: float = 0.0,
-                     secondary_api_key: str = ""):
+                     secondary_api_key: str = "", capture_mode: str = "auto"):
         # emit_log sends to WebSocket (user-facing)
         # _console_log sends to backend console AND per-session log file
         console_log = ConsoleLogger()
@@ -162,7 +256,7 @@ class AgentLoop:
             console_log.log(line)
 
         await _console_log("Agent initialized. Starting session logger...")
-        
+
         try:
             llm = LLMIntegration(provider=provider, api_key=api_key if not is_cli_provider(provider) else None,
                                  secondary_api_key=secondary_api_key if not is_cli_provider(provider) else None,
@@ -180,18 +274,34 @@ class AgentLoop:
         if grounder:
             await _console_log(f"Visual grounding ENABLED — using {_grounding_model} for element detection")
             await emit_log(f"STATUS: Visual grounding enabled (model: {_grounding_model})")
-            
+
         logger = SessionLogger()
         exec_log = ExecutionLogger()
         await _console_log(f"Console log: {console_log.get_filename()}")
         await _console_log(f"Narration log: {logger.get_filename()}")
         await _console_log(f"Execution log: {exec_log.get_filename()}")
-        
+
+        memory_game = self._memory_game(target_type, target_name)
         step = 1
         consecutive_errors = 0
         STEP_HISTORY_MAX = 5  # keep last N step summaries for LLM context
         step_history = []     # list of short summary strings
-        
+        last_step_text = ""   # previous step's actions + outcomes, for the model to check
+        goals: Optional[GoalTracker] = None
+        findings = FindingsLog()
+        notebook = RunNotebook()
+        prev_step_cmds = []   # commands that led to the current screen (finding repro)
+        run_started = time.time()
+        last_img_b64 = ""
+        last_narration = ""
+        pending_zoom = None   # image-space box the model asked to see enlarged (GCA-014)
+        click_points = []     # where the previous step's mouse actions landed (GCA-015)
+        missed_points = []    # previous step's clicks after which nothing visibly changed (GCA-020)
+        streaming = False     # cloud-streaming client detected (GCA-017)
+        self.screen_capture.capture_mode = "screen" if capture_mode == "screen" else "auto"
+        set_streaming(False)
+        await _console_log(f"Findings and report folder: {findings.dir}")
+
         async def _handle_budget_call(coro):
             """Helper to run an LLM call and cleanly handle budget exceptions."""
             try:
@@ -223,24 +333,85 @@ class AgentLoop:
 
                 return result, True
 
+        async def _pause(reason: str) -> bool:
+            """Pause until the user continues or aborts. Returns False on abort."""
+            exec_log.log_pause_reason(reason)
+            await _console_log(f"  [!] {reason} — pausing agent")
+            await emit_log(f"PAUSED: {reason}. Press Continue Agent or Abort to proceed.")
+            self.is_paused = True
+            self._resume_event = asyncio.Event()
+            await self._resume_event.wait()
+            self._resume_event = None
+            if not self.is_running:
+                exec_log.log_abort()
+                await _console_log("Agent aborted by user.")
+                return False
+            exec_log.log_resume()
+            await _console_log("Agent resumed by user.")
+            await emit_log("STATUS: Agent resumed — continuing...")
+            return True
+
         while self.is_running:
             try:
                 exec_log.log_step_header(step, model_name, target_name)
+
+                # ── Let animations and loading finish before planning (GCA-007) ──
+                settled = await self._wait_for_stable(target_type, target_name,
+                                                      timeout=SETTLE_TIMEOUT_S, interval=0.4)
+                if not settled:
+                    last_step_text += ("\nNote: the screen was still changing after "
+                                       f"{SETTLE_TIMEOUT_S:.0f}s, so it may be mid-animation or loading.")
+
                 await _console_log(f"Step {step} - Capturing screen ({target_name})...")
                 # Capture screen (includes raw PIL image for template matching)
-                capture_result = self.screen_capture.capture(target_type, target_name)
+                capture_result = await asyncio.to_thread(self.screen_capture.capture, target_type, target_name)
                 img_b64 = capture_result["image"]
                 reference_pil = capture_result["pil_image"]
                 offset_x = capture_result["offset_x"]
                 offset_y = capture_result["offset_y"]
                 scale_x = capture_result["scale_x"]
                 scale_y = capture_result["scale_y"]
-                
-                # Draw coordinate rulers on the LLM copy (not the template-matching reference)
-                ruler_img = self.screen_capture.draw_rulers(reference_pil)
+                capture_region = capture_result["region"]
+                if capture_result["hwnd"]:
+                    set_target_window(capture_result["hwnd"])
+                    if step == 1 and capture_mode == "auto" and is_streaming_client(capture_result["hwnd"], target_name):
+                        streaming = True
+                        set_streaming(True)
+                        self.screen_capture.capture_mode = "screen"
+                        await _console_log("  [stream] Cloud-streaming client detected — screen capture, slower input timing")
+                        await emit_log("STATUS: Streaming client detected — using screen capture and slower input timing")
+
+                # LLM copy: last clicks marked, then rulers (the template-matching
+                # reference stays clean). A requested zoom replaces the view.
+                view_note = ""
+                if pending_zoom:
+                    zoom_img, shown, factor = ScreenCapture.zoom_view(
+                        capture_result["native_image"], ScreenCapture.native_scale(capture_result["native_image"]),
+                        pending_zoom)
+                    ruler_img = zoom_img
+                    view_note = (f"ZOOMED VIEW: this screenshot shows only the region ({shown[0]},{shown[1]})-"
+                                 f"({shown[2]},{shown[3]}) of the screen, enlarged {factor:.1f}x. The ruler labels are "
+                                 "FULL-SCREEN coordinates — use them for every command. The next screenshot is the full screen again.")
+                    await _console_log(f"  [zoom] showing {shown} at {factor:.1f}x")
+                    pending_zoom = None
+                else:
+                    marked = ScreenCapture.draw_click_markers(reference_pil, click_points)
+                    ruler_img = self.screen_capture.draw_rulers(marked)
+                    # A click that changed nothing usually missed: show an
+                    # enlarged inset around it so the next aim is precise (GCA-020).
+                    if missed_points:
+                        native = capture_result["native_image"]
+                        ruler_img, corner, shown = ScreenCapture.add_miss_inset(
+                            ruler_img, native, ScreenCapture.native_scale(native), missed_points[-1])
+                        view_note = (f"INSET ({corner} corner, red frame): action {missed_points[-1][0]} of the previous "
+                                     f"step clicked but nothing visibly changed. The inset enlarges the area "
+                                     f"({shown[0]},{shown[1]})-({shown[2]},{shown[3]}) around that click; its ruler labels are "
+                                     "FULL-SCREEN coordinates. Check whether the crosshair is on the intended target and, "
+                                     "if not, aim using the inset's rulers.")
+                        await _console_log(f"  [inset] zoom inset around missed click {missed_points[-1]} ({corner})")
                 img_b64_with_rulers = self.screen_capture.pil_to_base64(ruler_img)
 
-                await _console_log(f"Step {step} - Analyzing with {model_name}... offset=({offset_x},{offset_y}) scale=({scale_x:.2f},{scale_y:.2f})")
+                await _console_log(f"Step {step} - Analyzing with {model_name}... region={capture_region} scale=({scale_x:.2f},{scale_y:.2f})")
                 await emit_log(f"THINKING: Step {step} — analyzing screen...")
                 # ── Experience / Recipe lookup ──
                 step_phash = await asyncio.to_thread(
@@ -249,6 +420,7 @@ class AgentLoop:
                 # Try recipe replay first — skip LLM entirely if we have a
                 # high-confidence recipe for this screen state.
                 matched_recipe = self.recipes.match(step_phash)
+                check_text, progress, goal_done, escalated = "", None, False, False
                 if matched_recipe:
                     await _console_log(f"  [recipe] Matched '{matched_recipe.name}' — replaying {len(matched_recipe.actions)} action(s) without LLM")
                     await emit_log(f"RECIPE: Replaying '{matched_recipe.name}' (saved {len(matched_recipe.actions)} actions)")
@@ -292,22 +464,95 @@ class AgentLoop:
                     active_tools = PHASE_TOOLS.get(current_phase, PHASE_TOOLS["unknown"])
                     await _console_log(f"  [tools] Detected phase '{current_phase}' — limiting to {len(active_tools)} tools")
 
+                    # ── Goal checklist from the user's instructions (GCA-010) ──
+                    if goals is None:
+                        goal_texts, ok = await _handle_budget_call(asyncio.to_thread(
+                            llm.plan_goals, img_b64_with_rulers, game_instructions, role, model_name))
+                        if not ok:
+                            break
+                        goals = GoalTracker.from_list(goal_texts or [], role)
+                        if goals.goals:
+                            await _console_log("  [goals]\n" + goals.format_for_prompt())
+                            await emit_log("STATUS: Goals — " + " | ".join(g.text for g in goals.goals))
+                        else:
+                            await _console_log("  [goals] no checklist (planning returned nothing)")
+
+                    # ── Stuck? plan this step with the stronger model (GCA-009) ──
+                    escalated = goals.should_escalate()
+                    plan_model = escalation_model(provider, model_name) if escalated else model_name
+                    stuck_text = goals.stuck_text(step_history) if escalated else ""
+                    if escalated:
+                        await _console_log(f"  [stuck] {goals.no_progress} steps without progress — planning with {plan_model}")
+                        await emit_log(f"STATUS: Stuck — trying a different approach with {plan_model}")
+
                     # Run the synchronous LLM call in a thread to avoid blocking asyncio loop
                     history_text = "\n".join(step_history) if step_history else ""
-                    memories_text = self.memories.format_for_prompt(game=game_instructions[:60])
+                    memories_text = self.memories.format_for_prompt(game=memory_game)
+                    second_frame = None
+                    if self.dual_frame:
+                        await asyncio.sleep(0.4)
+                        second_frame = ScreenCapture.pil_to_base64(await asyncio.to_thread(
+                            self.screen_capture.capture_fresh, target_type, target_name))
+                    t_llm = time.time()
                     response, should_continue = await _handle_budget_call(
-                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, model_name, role, extra_context, enabled_tools=active_tools, step_history=history_text, memories_text=memories_text)
+                        asyncio.to_thread(llm.get_next_action, img_b64_with_rulers, game_instructions, plan_model, role, extra_context,
+                                          enabled_tools=active_tools, step_history=history_text, memories_text=memories_text,
+                                          last_step=last_step_text, image_size=reference_pil.size,
+                                          goals_text="\n\n".join(filter(None, [goals.format_for_prompt(),
+                                                                               findings.titles_for_prompt()])),
+                                          stuck_text=stuck_text, view_note=view_note,
+                                          extra_image_b64=second_frame,
+                                          notebook_text=notebook.format_for_prompt())
                     )
                     if not should_continue:
                         break
                     if response is None:
                         continue  # Retry step
-                    
+                    await _console_log(f"  [llm] planned in {time.time() - t_llm:.1f}s")
+
                     narration = response.get("narration", "No narration provided.")
                     raw_actions = response.get("actions", [])
+                    check_text = response.get("last_step_check", "") or ""
+                    progress = response.get("progress")
+                    if not isinstance(progress, bool):
+                        progress = None
+                    goal_done = response.get("goal_done") is True
+                    last_img_b64 = img_b64_with_rulers
+                    last_narration = narration
+
+                    # ── Run notebook and turn awareness (GCA-021..024) ──
+                    for note in notebook.add(response.get("notes_add")):
+                        await _console_log(f"  [note] {note}")
+                        await emit_log(f"STATUS: Note — {note}")
+                    actor_now = str(response.get("actor_now") or "").strip()
+                    if actor_now:
+                        await _console_log(f"  [actor] {actor_now}")
+                        check_text = f"[actor: {actor_now}] " + check_text
+
+                    # ── Goal checklist corrections from the model (GCA-019) ──
+                    update = response.get("goals_update") or []
+                    if isinstance(update, list) and update and goals.replace_remaining([str(g) for g in update]):
+                        await _console_log("  [goals] revised by the model:\n" + goals.format_for_prompt())
+                        await emit_log("STATUS: Goals revised — " + " | ".join(
+                            g.text for g in goals.goals if g.status in ("current", "pending")))
+                        goal_done = False  # the done flag referred to the old goal
+
+                    # ── Findings (GCA-011) ──
+                    for raw in (response.get("findings") or [])[:MAX_FINDINGS_PER_STEP]:
+                        f = findings.add(raw, step, prev_step_cmds, reference_pil)
+                        if f:
+                            await _console_log(f"  [finding #{f['id']}] {f['type']}/{f['severity']} "
+                                               f"{'confirmed' if f['confirmed'] else 'unconfirmed'}: {f['title']}")
+                            await emit_log(f"FINDING: [{f['type']}/{f['severity']}] {f['title']}")
 
                 # Detect LLM error responses (no actions = something went wrong)
                 if not raw_actions and ("error" in narration.lower() or "Error" in narration):
+                    # Auth / billing errors won't fix themselves by waiting.
+                    if re.search(r"\b(401|402|403)\b|authenticat|payment required|credit balance|usage limit|limit reached|out of (extra )?usage",
+                                 narration, re.I):
+                        await emit_log(f"ERROR: {narration} — stopping (check the API key / billing)")
+                        await _console_log(f"  [!] Fatal provider error: {narration[:200]} — stopping agent")
+                        break
                     consecutive_errors += 1
                     cooldown = min(consecutive_errors * 5, 30)  # 5s, 10s, 15s... up to 30s
                     await emit_log(f"ERROR: {narration} (#{consecutive_errors}, cooling down {cooldown}s)")
@@ -316,19 +561,25 @@ class AgentLoop:
                     step += 1
                     continue
                 consecutive_errors = 0
-                
+
                 # Parse actions into (command, reason) tuples
                 parsed_actions = [self._parse_action(a) for a in raw_actions]
-                
+                expects = [self._action_expect(a) for a in raw_actions]
+
                 # Send narration to user-facing telemetry
+                if check_text:
+                    await _console_log(f"  [check] {'progress' if progress else 'no progress' if progress is False else '?'}: {check_text[:300]}")
+                    await emit_log(f"CHECK: {check_text}")
                 await emit_log(f"NARRATION: {narration}")
-                for cmd, reason, *_ in parsed_actions:
+                for (cmd, reason, *_), expect in zip(parsed_actions, expects):
                     label = f"{cmd}" + (f"  —  {reason}" if reason else "")
                     await emit_log(f"ACTION: {label}")
-                
+
                 # Log to markdown
-                logger.log_step(step, narration, parsed_actions)
-                
+                logger.log_step(step, narration,
+                                [(c, r + (f" (expect: {e})" if e else "")) for (c, r, *_), e in zip(parsed_actions, expects)],
+                                check=check_text, progress=progress)
+
                 # Snapshot before any actions to detect overall change
                 pre_step_pil = await asyncio.to_thread(
                     self.screen_capture.capture_fresh, target_type, target_name)
@@ -336,20 +587,26 @@ class AgentLoop:
                 # Re-focus game window before executing (focus drifts during LLM call)
                 await asyncio.to_thread(self._focus_window, target_type, target_name)
 
-                MAX_RETRIES_CLICK = 5   # 5 nudge attempts; if target isn't found, re-plan
-                MAX_RETRIES_DRAG  = 7   # drags are finicky but cap waste at ~30s
-                LLM_ASSIST_AFTER  = 3   # ask LLM for help sooner to avoid blind retries
                 failed_actions = 0
+                blocked_actions = 0
                 total_actions = 0
-                attempt_counts = []  # per-action attempt counts for struggle detection
+                action_results = []  # (cmd, reason, expect, outcome) for the next prompt
+                click_points = []
+                missed_points = []
 
-                # Execute actions ONE BY ONE with vision verification + retry
-                # Using a while-loop so we can splice in revalidated actions mid-flight
+                # Execute actions ONE BY ONE. Clicks/hovers run once — whether
+                # they worked is judged by the model on the next screenshot.
                 from action_verifier import MIN_CONFIDENCE as VISION_CONF_THRESHOLD
                 action_index = 0
 
-                # Cache the detected phase for the step to avoid re-running OCR repeatedly
-                current_phase, _ = await asyncio.to_thread(detect_phase, pre_step_pil)
+                # Phase detection (OCR) already ran on this step's screenshot when
+                # the LLM was called; recipe steps run it once here.
+                if _active_recipe:
+                    current_phase, _ = await asyncio.to_thread(detect_phase, pre_step_pil)
+
+                def _record(outcome: str):
+                    cmd_, reason_, *_ = parsed_actions[action_index]
+                    action_results.append((cmd_, reason_, expects[action_index] if action_index < len(expects) else "", outcome))
 
                 while action_index < len(parsed_actions) and self.is_running:
                     cmd, reason, precond, wait_after = parsed_actions[action_index]
@@ -374,6 +631,7 @@ class AgentLoop:
                             await _console_log(f"  [!] {msg}")
                             await emit_log(f"WARNING: {msg}")
                             exec_log.log(f"  [skip] {msg}")
+                            _record(f"skipped (precondition '{precond}' not met)")
                             action_index += 1
                             continue
 
@@ -388,15 +646,51 @@ class AgentLoop:
                         action_index += 1
                         continue
 
-                    # ── Save Memory ──
+                    # ── Save Memory (GCA-006: game-scoped, no coordinates, corrections replace) ──
                     if cmd.startswith("save_memory"):
-                        memory_text = cmd.replace("save_memory", "").strip()
+                        memory_text = cmd.replace("save_memory", "", 1).strip()
                         if memory_text:
-                            self.memories.add(content=memory_text, game="", tags=["agent-discovered"], source="agent")
-                            await _console_log(f"  [memory] Saved: {memory_text}")
-                            await emit_log(f"STATUS: Memory saved — {memory_text}")
+                            outcome, _mem = self.memories.save_from_agent(memory_text, game=memory_game)
+                            await _console_log(f"  [memory] {outcome}: {memory_text}")
+                            await emit_log(f"STATUS: Memory {outcome} — {memory_text}")
+                            if outcome.startswith("rejected"):
+                                _record(f"memory {outcome}")
                         action_index += 1
                         continue
+
+                    # ── Zoom: next screenshot shows this region enlarged (GCA-014) ──
+                    if cmd.lower().startswith("zoom"):
+                        try:
+                            box = tuple(int(float(v)) for v in cmd.split()[1:5])
+                            assert len(box) == 4
+                            if abs(box[2] - box[0]) > MAX_ZOOM_BOX_W:
+                                # A near-full-screen "zoom" shows nothing new and costs a step.
+                                _record(f"not run — zoom box is {abs(box[2] - box[0])} px wide; zoom only on a "
+                                        f"small area (at most {MAX_ZOOM_BOX_W} px wide) around the target")
+                            else:
+                                pending_zoom = box
+                                _record("ok — the next screenshot is a zoomed view of that region")
+                        except (ValueError, AssertionError):
+                            _record("not run (zoom needs x1 y1 x2 y2)")
+                        action_index += 1
+                        continue
+
+                    # ── click_text: find a visible label with OCR and click it (GCA-016) ──
+                    text_note = ""
+                    if cmd.lower().startswith("click_text"):
+                        label = cmd[len("click_text"):].strip().strip('"\'')
+                        native, nscale = await asyncio.to_thread(self.screen_capture.grab_native, target_type, target_name)
+                        hit = await asyncio.to_thread(find_text, native, label)
+                        if hit is None:
+                            await _console_log(f"  [click_text] '{label}' not found on screen")
+                            _record(f"not run — OCR could not find the text '{label}' on screen; click it by coordinates")
+                            action_index += 1
+                            continue
+                        hx, hy = round(hit[0] / nscale), round(hit[1] / nscale)
+                        text_note = f"; found '{hit[3]}' at ({hx},{hy})"
+                        await _console_log(f"  [click_text] '{label}' → '{hit[3]}' at ({hx},{hy}) score {hit[2]:.2f}")
+                        cmd = f"click {hx} {hy}"
+                        parsed_actions[action_index] = (cmd, reason, *parsed_actions[action_index][2:])
 
                     # ── Coordinate clamping (fix OOB instead of blocking) ──
                     cmd, was_clamped, clamp_detail = self.safety.clamp_coordinates(cmd)
@@ -412,15 +706,23 @@ class AgentLoop:
                         await _console_log(f"  [safety] BLOCKED: {block_reason}")
                         await emit_log(f"SAFETY: Blocked action {action_index+1} — {block_reason}")
                         exec_log.log(f"  [safety] BLOCKED action {action_index+1}: {block_reason}")
+                        _record(f"not run (safety filter: {block_reason})")
                         total_actions += 1
                         failed_actions += 1
-                        attempt_counts.append(1)
                         action_index += 1
                         continue
 
-                    action_succeeded = False
-                    final_attempt = 0
-                    after_pil = None
+                    # ── Window moved / resized since the screenshot? (GCA-002) ──
+                    try:
+                        now_region = await asyncio.to_thread(self.screen_capture.current_region, target_type, target_name)
+                    except WindowNotFoundError:
+                        raise
+                    if tuple(now_region) != tuple(capture_region):
+                        msg = f"window moved or resized ({capture_region} → {now_region}); replanning"
+                        await _console_log(f"  [!] {msg}")
+                        exec_log.log(f"  [replan] {msg}")
+                        _record(f"not run ({msg})")
+                        break
 
                     action_type = cmd.split()[0].lower()
                     is_drag = action_type == "drag"
@@ -430,248 +732,170 @@ class AgentLoop:
 
                     # `wait` commands always succeed — no screen change expected
                     if is_wait:
+                        try:
+                            if float(cmd.split()[1]) > MAX_MODEL_WAIT_S:
+                                cmd = f"wait {MAX_MODEL_WAIT_S:g}"
+                        except (IndexError, ValueError):
+                            cmd = f"wait {MAX_MODEL_WAIT_S:g}"
                         exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale_x)
-                        self.input_controller.execute_action(cmd, offset_x, offset_y, scale_x, scale_y)
+                        await asyncio.to_thread(self.input_controller.execute_action, cmd, offset_x, offset_y, scale_x, scale_y)
                         exec_log.log_result(0, True, True)
                         await _console_log(f"  ✓ Wait completed")
                         total_actions += 1
-                        attempt_counts.append(1)
                         exec_log.log_action_outcome(action_index + 1, True, 1)
                         action_index += 1
                         continue
 
                     # `run_macro` commands bypass vision verification
                     if is_macro:
-                        exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale)
+                        exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale_x)
                         # Run the macro and then wait for screen stability
-                        await asyncio.to_thread(self.input_controller.execute_action, cmd, offset_x, offset_y, scale)
+                        await asyncio.to_thread(self.input_controller.execute_action, cmd, offset_x, offset_y, scale_x, scale_y)
                         stable = await self._wait_for_stable(target_type, target_name, timeout=4.0, interval=0.4)
                         exec_log.log_result(0, True, stable)
                         await _console_log(f"  ✓ Macro {cmd} completed")
+                        _record("ok (macro replayed)")
                         total_actions += 1
-                        attempt_counts.append(1)
                         exec_log.log_action_outcome(action_index + 1, True, 1)
                         action_index += 1
-                        overall_changed = True # Assume macro did something
-                        # Update after_pil so that following actions can be revalidated
-                        after_pil = await asyncio.to_thread(self.screen_capture.capture_fresh, target_type, target_name)
                         continue
 
-                    # ── Fast-path: keyboard actions ──
-                    # Keyboard presses have no coordinates to verify or nudge.
-                    # Execute immediately and move on — like the Cascade model:
-                    # do the action, check results at the end of the batch.
+                    # ── Keyboard actions: no coordinates to verify ──
                     if is_keyboard:
+                        before_pil = await asyncio.to_thread(
+                            self.screen_capture.capture_fresh, target_type, target_name)
                         exec_log.log_exec(0, cmd, 0, offset_x, offset_y, scale_x)
                         await _console_log(f"  [exec] {cmd}" + (f"  —  {reason}" if reason else ""))
                         await emit_log({"type": "executing", "command": cmd, "reason": reason, "attempt": 0, "max_retries": 0, "message": f"{cmd}" + (f"  —  {reason}" if reason else "")})
-                        self.input_controller.execute_action(cmd, offset_x, offset_y, scale_x, scale_y)
-                        await asyncio.sleep(0.3)  # brief pause for game to register
-                        exec_log.log_result(0, True, True)
-                        await _console_log(f"  ✓ Key action completed")
+                        status = await asyncio.to_thread(self.input_controller.execute_action, cmd, offset_x, offset_y, scale_x, scale_y)
                         total_actions += 1
-                        attempt_counts.append(1)
+                        if status.startswith("blocked"):
+                            blocked_actions += 1
+                            failed_actions += 1
+                            _record(f"NOT SENT — {status}")
+                            await emit_log({"type": "warning", "message": f"Input blocked: {status}"})
+                            exec_log.log_action_outcome(action_index + 1, False, 1)
+                            break
+                        await asyncio.sleep(0.3)  # brief pause for game to register
+                        after_pil = await asyncio.to_thread(
+                            self.screen_capture.capture_fresh, target_type, target_name)
+                        changed = ScreenCapture.pil_images_different(
+                            before_pil, after_pil, fraction_threshold=CHANGE_HINT_THRESHOLD)
+                        _record(f"{status}; screen {'changed' if changed else 'did not visibly change'}")
+                        exec_log.log_result(0, changed, True)
+                        await _console_log(f"  ✓ Key action sent ({'screen changed' if changed else 'no visible change'})")
                         exec_log.log_action_outcome(action_index + 1, True, 1)
                         action_index += 1
                         continue
 
-                    if is_drag:
-                        max_retries = MAX_RETRIES_DRAG
+                    # ── Mouse actions: one attempt, verifier may correct small drift ──
+                    fresh_pil = await asyncio.to_thread(
+                        self.screen_capture.capture_fresh, target_type, target_name)
+                    if text_note:
+                        adjusted_cmd, adjustments = cmd, []  # located on the fresh frame already
                     else:
-                        max_retries = MAX_RETRIES_CLICK
-
-                    action_approved = False
-                    for attempt in range(max_retries + 1):
-                        if not self.is_running:
-                            break
-
-                        # ── Vision verification ──
-                        fresh_pil = await asyncio.to_thread(
-                            self.screen_capture.capture_fresh, target_type, target_name)
                         adjusted_cmd, adjustments = await asyncio.to_thread(
                             self.verifier.verify_and_adjust, cmd, reference_pil, fresh_pil, reason)
+                    if adjustments:
+                        adj_log = self.verifier.format_adjustment_log(adjustments)
+                        await _console_log(f"  [vision]\n{adj_log}")
+                        exec_log.log_vision(0, adj_log)
 
-                        # On retries, also apply a coordinate nudge to the target
-                        if attempt > 0:
-                            adjusted_cmd = ActionVerifier.nudge_action(
-                                adjusted_cmd, attempt - 1)
-
-                        if adjustments:
-                            adj_log = self.verifier.format_adjustment_log(adjustments)
-                            await _console_log(f"  [vision] attempt {attempt}\n{adj_log}")
-                            exec_log.log_vision(attempt, adj_log)
-
-                        # ── High-risk classification ──
-                        if not action_approved:
-                            is_risky, keyword = await asyncio.to_thread(
-                                self.verifier.check_action_risk, adjusted_cmd, fresh_pil)
-                            if is_risky:
-                                await emit_log(f"REQUIRES_APPROVAL: High-risk keyword '{keyword}' detected. Please approve to execute: {adjusted_cmd}")
-                                await _console_log(f"  [!] High-risk keyword '{keyword}' detected. Pausing for approval.")
-                                self.is_paused = True
-                                self._resume_event = asyncio.Event()
-                                await self._resume_event.wait()
-                                self._resume_event = None
-                                if not self.is_running:
-                                    break
-                                action_approved = True
-                                await _console_log("  [+] Action approved by user.")
-                                await emit_log("STATUS: Action approved — continuing...")
-
-                        attempt_label = f" (retry {attempt})" if attempt > 0 else ""
-                        exec_label = adjusted_cmd if adjusted_cmd != cmd else cmd
-                        # Only emit to frontend on key attempts to avoid sidebar spam
-                        emit_to_frontend = attempt == 0 or attempt % 5 == 0
-                        await _console_log(f"  [exec{attempt_label}] {exec_label}")
-                        if emit_to_frontend:
-                            if adjusted_cmd != cmd or attempt > 0:
-                                await emit_log({"type": "executing", "command": exec_label, "reason": reason, "attempt": attempt, "max_retries": max_retries, "message": f"{exec_label}" + (f"  —  {reason}{attempt_label}" if reason else attempt_label)})
-                            else:
-                                await emit_log({"type": "executing", "command": cmd, "reason": reason, "attempt": attempt, "max_retries": max_retries, "message": f"{cmd}" + (f"  —  {reason}" if reason else "")})
-
-                        # Use the fresh screenshot as "before" for pixel comparison
-                        before_pil = fresh_pil
-
-                        # Update reference for next action's template matching
-                        reference_pil = fresh_pil
-
-                        # Escalating settle: 0.5s base, +0.05s per attempt, cap 1.5s
-                        settle = min(0.5 + attempt * 0.05, 1.5)
-                        exec_log.log_exec(attempt, adjusted_cmd, settle,
-                                          offset_x, offset_y, scale_x)
-                        self.input_controller.execute_action(
-                            adjusted_cmd, offset_x, offset_y, scale_x, scale_y, settle_s=settle)
-
-                        # Wait for game to process
-                        await asyncio.sleep(0.4)
-                        stable = await self._wait_for_stable(target_type, target_name,
-                                                              timeout=2.0, interval=0.3)
-
-                        # Check if screen changed (pixel-level comparison, much
-                        # more sensitive than the old 16x16 perceptual hash)
-                        # Click actions use a slightly higher threshold to filter
-                        # idle animations, but not so high that subtle changes
-                        # (e.g. playing a card, selecting a map node) are missed.
-                        after_pil = await asyncio.to_thread(
-                            self.screen_capture.capture_fresh, target_type, target_name)
-                        is_click_action = cmd.split()[0].lower().endswith("click")
-                        diff_threshold = 0.012 if is_click_action else 0.008
-                        changed = ScreenCapture.pil_images_different(
-                            before_pil, after_pil, fraction_threshold=diff_threshold)
-
-                        # Drag persistence check: snap-back detection.
-                        # Drags can register as CHANGED (pickup animation) even
-                        # when the item wasn't actually placed and snapped back.
-                        # Wait a bit longer and re-compare to the BEFORE screenshot.
-                        if changed and is_drag:
-                            await asyncio.sleep(0.6)
-                            persist_pil = await asyncio.to_thread(
-                                self.screen_capture.capture_fresh, target_type, target_name)
-                            still_changed = ScreenCapture.pil_images_different(
-                                before_pil, persist_pil, fraction_threshold=0.008)
-                            if not still_changed:
-                                changed = False
-                                exec_log.log(f"  [result] attempt={attempt}  screen=SNAP_BACK (drag reverted)")
-                                await _console_log(f"  [!] Drag appeared to succeed but screen reverted (snap-back)")
-
-                        exec_log.log_result(attempt, changed, stable)
-
-                        if changed:
-                            # ── Verify Agent Sub-role ──
-                            # Only verify on first 2 attempts — after that, trust pixel diff.
-                            # Each verify is an extra LLM round-trip; on retries the screen
-                            # is more likely to show transient animations that confuse the verifier.
-                            VERIFY_MAX_ATTEMPT = 1
-                            if (role == "gamer" and getattr(self, 'llm', None)
-                                    and attempt <= VERIFY_MAX_ATTEMPT):
-                                await _console_log("  [verify] Asking Verify Agent if game state progressed...")
-                                after_b64 = self.screen_capture.pil_to_base64(after_pil)
-                                verified, verify_reason = await asyncio.to_thread(
-                                    self.llm.verify_action_success, after_b64, exec_label, model_name)
-                                if not verified:
-                                    changed = False
-                                    await _console_log(f"  [!] Screen changed visually, but Verify Agent ruled action failed. Reason: {verify_reason}")
-                                    exec_log.log(f"  [verify] Failed: {verify_reason}")
-
-                        if changed:
-                            await _console_log(f"  ✓ Action {action_index+1} succeeded on attempt {attempt}")
-                            action_succeeded = True
-                            final_attempt = attempt
+                    # ── High-risk classification (OCR; clicks only — hovers/drags/scrolls can't confirm a dialog) ──
+                    is_risky, keyword = False, ""
+                    if action_type.endswith("click"):
+                        is_risky, keyword = await asyncio.to_thread(
+                            self.verifier.check_action_risk, adjusted_cmd, fresh_pil)
+                    if is_risky and self.unattended:
+                        # Timed runs are unattended: don't wait for an approval
+                        # nobody will give — refuse the click and tell the model.
+                        await _console_log(f"  [!] High-risk keyword '{keyword}' at the target — not clicked (unattended run)")
+                        await emit_log(f"WARNING: Refused a click on a '{keyword}' control (unattended run)")
+                        _record(f"NOT SENT — the target looks like a destructive control ('{keyword}'); "
+                                "choose a safer option (e.g. Cancel / Continue / Back)")
+                        total_actions += 1
+                        action_index += 1
+                        continue
+                    if is_risky:
+                        await emit_log(f"REQUIRES_APPROVAL: High-risk keyword '{keyword}' detected. Please approve to execute: {adjusted_cmd}")
+                        await _console_log(f"  [!] High-risk keyword '{keyword}' detected. Pausing for approval.")
+                        self.is_paused = True
+                        self._resume_event = asyncio.Event()
+                        await self._resume_event.wait()
+                        self._resume_event = None
+                        if not self.is_running:
                             break
-                        else:
-                            await _console_log(f"  ✗ Attempt {attempt} — screen unchanged")
-                            if attempt < max_retries:
-                                # ── Mid-retry LLM consultation ──
-                                # After LLM_ASSIST_AFTER failed attempts, ask the LLM
-                                # what's wrong instead of continuing blind nudges.
-                                if attempt + 1 == LLM_ASSIST_AFTER:
-                                    await _console_log(f"  [retry-assist] Asking LLM for help after {attempt+1} failures...")
-                                    await emit_log({"type": "llm_assist", "message": f"Asking LLM for help — action {action_index+1} failed {attempt+1} times"})
-                                    assist_pil = await asyncio.to_thread(
-                                        self.screen_capture.capture_fresh, target_type, target_name)
-                                    assist_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(assist_pil))
-                                    assist_result, should_continue = await _handle_budget_call(
-                                        asyncio.to_thread(llm.retry_assist, assist_b64, cmd, reason,
-                                                          attempt + 1, game_instructions, model_name)
-                                    )
-                                    if not should_continue:
-                                        break
-                                    if assist_result is None:
-                                        continue  # Retry this attempt iteration
+                        await _console_log("  [+] Action approved by user.")
+                        await emit_log("STATUS: Action approved — continuing...")
 
-                                    if assist_result:
-                                        new_cmd, new_reason = assist_result
-                                        exec_log.log_retry_assist(attempt + 1, cmd, new_cmd, new_reason)
-                                        if new_cmd.lower() == "skip":
-                                            await _console_log(f"  [retry-assist] LLM says SKIP: {new_reason}")
-                                            await emit_log({"type": "llm", "message": f"skipping action — {new_reason}"})
-                                            break  # exit retry loop, mark as failed
-                                        else:
-                                            await _console_log(f"  [retry-assist] LLM corrected: {new_cmd}")
-                                            await emit_log({"type": "llm", "message": f"corrected action: {new_cmd}"})
-                                            cmd = new_cmd
-                                            reason = new_reason or reason
-                                            # Update in parsed_actions so downstream
-                                            # revalidation sees the corrected action
-                                            parsed_actions[action_index] = (cmd, reason, precond, wait_after)
-                                            # Recompute max_retries for new action type
-                                            action_type = cmd.split()[0].lower()
-                                            is_drag = action_type == "drag"
-                                            if is_drag:
-                                                max_retries = MAX_RETRIES_DRAG
-                                            else:
-                                                max_retries = MAX_RETRIES_CLICK
-                                            # Re-focus and continue with next attempt
-                                            await asyncio.to_thread(self._focus_window, target_type, target_name)
-                                            continue  # skip the normal retry logic below
+                    await _console_log(f"  [exec] {adjusted_cmd}")
+                    await emit_log({"type": "executing", "command": adjusted_cmd, "reason": reason, "attempt": 0, "max_retries": 0, "message": f"{adjusted_cmd}" + (f"  —  {reason}" if reason else "")})
 
-                                # Right-click cancel ONLY for drag actions — cancels
-                                # an item stuck to cursor after a failed drag.  For click
-                                # actions this is harmful: right-clicking on a button
-                                # opens tooltips/overlays that block subsequent clicks.
-                                is_drag = cmd.split()[0].lower() == "drag"
-                                if is_drag:
-                                    _send_button(MOUSEEVENTF_RIGHTDOWN)
-                                    await asyncio.sleep(0.05)
-                                    _send_button(MOUSEEVENTF_RIGHTUP)
-                                    await asyncio.sleep(0.3)
-                                # Re-focus before retry
-                                await asyncio.to_thread(self._focus_window, target_type, target_name)
-                                await _console_log(f"  ↻ Retrying with nudge + longer settle...")
-                                if (attempt + 1) % 5 == 0:
-                                    await emit_log({"type": "action_retry", "action_index": action_index + 1, "attempt": attempt + 1, "max_retries": max_retries, "message": f"Retrying action {action_index+1} (attempt {attempt+1}/{max_retries})"})
-
+                    before_pil = fresh_pil
+                    reference_pil = fresh_pil  # next action's template matching starts from here
+                    drag_settle = 0.5
+                    exec_log.log_exec(0, adjusted_cmd, drag_settle, offset_x, offset_y, scale_x)
+                    status = await asyncio.to_thread(
+                        self.input_controller.execute_action,
+                        adjusted_cmd, offset_x, offset_y, scale_x, scale_y, drag_settle)
                     total_actions += 1
-                    if not action_succeeded:
+                    if status.startswith("blocked"):
+                        blocked_actions += 1
                         failed_actions += 1
-                        final_attempt = max_retries
-                        await _console_log(f"  ✗✗ Action {action_index+1} FAILED after {max_retries} retries")
-                        await emit_log({"type": "warning", "message": f"Action failed after {max_retries} retries — skipping"})
-                    attempt_counts.append(final_attempt + 1)
-                    exec_log.log_action_outcome(action_index + 1, action_succeeded, final_attempt + 1)
+                        _record(f"NOT SENT — {status}")
+                        await emit_log({"type": "warning", "message": f"Input blocked: {status}"})
+                        exec_log.log_action_outcome(action_index + 1, False, 1)
+                        break
 
-                    if not stable:
-                        await _console_log(f"  … Screen still animating (timeout), proceeding")
+                    # Wait for game to process (streams add a round trip)
+                    await asyncio.sleep(0.8 if streaming else 0.4)
+                    stable = await self._wait_for_stable(target_type, target_name,
+                                                          timeout=0.9, interval=0.3)
+                    after_pil = await asyncio.to_thread(
+                        self.screen_capture.capture_fresh, target_type, target_name)
+                    changed = ScreenCapture.pil_images_different(
+                        before_pil, after_pil, fraction_threshold=CHANGE_HINT_THRESHOLD)
+
+                    outcome = f"{status}; screen {'changed' if changed else 'did not visibly change'}"
+                    # Drag persistence check: one retry with a longer hold if
+                    # the dragged item snapped back.
+                    if is_drag:
+                        await asyncio.sleep(0.6)
+                        persist_pil = await asyncio.to_thread(
+                            self.screen_capture.capture_fresh, target_type, target_name)
+                        if not ScreenCapture.pil_images_different(before_pil, persist_pil, fraction_threshold=CHANGE_HINT_THRESHOLD):
+                            exec_log.log("  [result] screen=SNAP_BACK (drag reverted) — retrying once with longer hold")
+                            await _console_log("  [!] Drag reverted (snap-back) — retrying once with a longer hold")
+                            await asyncio.to_thread(
+                                self.input_controller.execute_action,
+                                adjusted_cmd, offset_x, offset_y, scale_x, scale_y, 1.2)
+                            await asyncio.sleep(1.0)
+                            after_pil = await asyncio.to_thread(
+                                self.screen_capture.capture_fresh, target_type, target_name)
+                            changed = ScreenCapture.pil_images_different(
+                                before_pil, after_pil, fraction_threshold=CHANGE_HINT_THRESHOLD)
+                            outcome = ("ok after one retry (first drag snapped back)" if changed
+                                       else "drag snapped back twice — item probably not placed")
+                            if not changed:
+                                failed_actions += 1
+
+                    if adjusted_cmd != cmd:
+                        outcome += f"; sent as '{adjusted_cmd}' after drift correction"
+                    outcome += text_note
+                    _record(outcome)
+                    try:
+                        pts = adjusted_cmd.split()
+                        if pts[0] == "drag":
+                            click_points.append((action_index + 1, int(pts[3]), int(pts[4])))
+                        else:
+                            click_points.append((action_index + 1, int(pts[1]), int(pts[2])))
+                            if pts[0].endswith("click") and not changed:
+                                missed_points.append(click_points[-1])
+                    except (IndexError, ValueError):
+                        pass
+                    exec_log.log_result(0, changed, stable)
+                    exec_log.log_action_outcome(action_index + 1, True, 1)
+                    await _console_log(f"  → {outcome}")
 
                     # ── wait_after condition (PR #8: Smart Preconditions) ──
                     if wait_after and self.is_running:
@@ -684,12 +908,12 @@ class AgentLoop:
                             await _console_log(f"  [wait_after] Timeout waiting for screen to stabilize.")
 
                     # ── Proactive re-planning ──
+                    # A big UI change, or a next target that no longer matches
+                    # the screenshot, means the rest of the plan is stale: stop
+                    # and let the next planning call look at the new screen.
                     REPLAN_THRESHOLD = 0.15  # 15% pixel change = major UI shift
-                    if action_succeeded and after_pil is not None and action_index < len(parsed_actions) - 1:
-                        major_change = ScreenCapture.pil_images_different(
-                            pre_step_pil, after_pil, fraction_threshold=REPLAN_THRESHOLD)
-
-                        if major_change:
+                    if action_index < len(parsed_actions) - 1:
+                        if ScreenCapture.pil_images_different(pre_step_pil, after_pil, fraction_threshold=REPLAN_THRESHOLD):
                             remaining_count = len(parsed_actions) - action_index - 1
                             await _console_log(f"  [replan] Major screen change detected — discarding {remaining_count} remaining action(s)")
                             await emit_log(f"RE-PLANNING: Screen changed significantly — getting fresh analysis")
@@ -697,47 +921,16 @@ class AgentLoop:
                             action_index += 1
                             break
 
-                        # Minor change — check if next action's coordinates still valid
                         next_cmd = parsed_actions[action_index + 1][0]
                         conf = await asyncio.to_thread(
                             self.verifier.check_action_confidence,
                             next_cmd, reference_pil, after_pil)
-
                         if conf < VISION_CONF_THRESHOLD:
-                            await _console_log(f"  [revalidate] Next action confidence {conf:.2f} < {VISION_CONF_THRESHOLD} — requesting LLM update...")
-                            await emit_log(f"REVALIDATING: Updating remaining action coordinates...")
-
-                            # revalidate_actions expects a list of (cmd, reason) tuples
-                            remaining = [(cmd, reason) for cmd, reason, _, _ in parsed_actions[action_index + 1:]]
-                            img_b64 = ScreenCapture.pil_to_base64(ScreenCapture.draw_rulers(after_pil))
-                            raw_updated, should_continue = await _handle_budget_call(
-                                asyncio.to_thread(llm.revalidate_actions, img_b64, remaining,
-                                                  game_instructions, model_name)
-                            )
-                            if not should_continue:
-                                break
-                            if raw_updated is None:
-                                continue  # Retry verification/revalidation
-
-                            if raw_updated:
-                                updated = [self._parse_action(a) for a in raw_updated]
-                                parsed_actions = parsed_actions[:action_index + 1] + updated
-                                reference_pil = after_pil
-
-                                exec_log.log_revalidation(conf, len(updated), [(c, r) for c, r, _, _ in updated])
-                                await _console_log(f"  [revalidate] Replaced {len(remaining)} remaining action(s) with {len(updated)} updated action(s)")
-                                for j, (ucmd, ureason, _, _) in enumerate(updated):
-                                    await _console_log(f"    [{action_index+2+j}] {ucmd}" + (f" — {ureason}" if ureason else ""))
-                            else:
-                                exec_log.log(f"  [revalidate] LLM call failed — continuing with original coords")
-                                await _console_log(f"  [revalidate] LLM update failed, continuing with original coords")
-                        else:
-                            exec_log.log_revalidation_skip(conf)
-                            await _console_log(f"  [revalidate] Next action confidence {conf:.2f} — coords OK")
-
-                    # Re-focus between actions in case focus drifted
-                    if action_index < len(parsed_actions) - 1:
-                        await asyncio.to_thread(self._focus_window, target_type, target_name)
+                            remaining_count = len(parsed_actions) - action_index - 1
+                            await _console_log(f"  [replan] Next target no longer matches the screen (conf {conf:.2f}) — discarding {remaining_count} remaining action(s)")
+                            exec_log.log(f"  [replan] next action confidence {conf:.2f} < {VISION_CONF_THRESHOLD}")
+                            action_index += 1
+                            break
 
                     action_index += 1
 
@@ -746,45 +939,8 @@ class AgentLoop:
                     self.screen_capture.capture_fresh, target_type, target_name)
                 overall_changed = ScreenCapture.pil_images_different(pre_step_pil, post_step_pil)
 
-                # ── Same-state retry ──
-                # If the step accomplished nothing, retry the last action locally
-                # instead of wasting ~40s on another LLM round-trip.  Handles
-                # the common case of End Turn not registering due to animation
-                # timing or the button not being active yet.
-                SAME_STATE_RETRIES = 5
-                if not overall_changed and self.is_running and parsed_actions:
-                    last_cmd = parsed_actions[-1][0]
-                    await _console_log(f"  [same-state] Step {step} had no effect — retrying last action: {last_cmd}")
-                    await emit_log(f"RETRYING: {last_cmd} (step had no visible effect)")
-                    exec_log.log(f"  [same-state] overall_screen_change=no → retrying last action: {last_cmd}")
-
-                    for ss_retry in range(SAME_STATE_RETRIES):
-                        if not self.is_running:
-                            break
-                        # Wait longer for animations/transitions to finish
-                        await asyncio.sleep(1.5)
-                        await asyncio.to_thread(self._focus_window, target_type, target_name)
-
-                        self.input_controller.execute_action(
-                            last_cmd, offset_x, offset_y, scale_x, scale_y)
-                        await asyncio.sleep(0.8)
-                        await self._wait_for_stable(target_type, target_name,
-                                                    timeout=2.0, interval=0.3)
-
-                        retry_pil = await asyncio.to_thread(
-                            self.screen_capture.capture_fresh, target_type, target_name)
-                        if ScreenCapture.pil_images_different(pre_step_pil, retry_pil):
-                            overall_changed = True
-                            await _console_log(f"  [same-state] Retry {ss_retry+1}/{SAME_STATE_RETRIES} succeeded")
-                            exec_log.log(f"  [same-state] retry {ss_retry+1} OK — screen changed")
-                            break
-                        else:
-                            await _console_log(f"  [same-state] Retry {ss_retry+1}/{SAME_STATE_RETRIES} — still unchanged")
-                            exec_log.log(f"  [same-state] retry {ss_retry+1} — still unchanged")
-
                 if not overall_changed:
-                    await _console_log(f"  [!] Step {step}: Screen identical before/after ALL actions — nothing worked")
-                    await emit_log(f"WARNING: No actions appeared to take effect this step")
+                    await _console_log(f"  Step {step}: screen identical before/after the actions")
                 else:
                     await _console_log(f"  Step {step}: Screen changed — actions had effect")
 
@@ -819,63 +975,62 @@ class AgentLoop:
                         experience_store=self.experience,
                     )
 
-                # Compute struggle metrics from attempt counts
-                avg_attempts = sum(attempt_counts) / len(attempt_counts) if attempt_counts else 1.0
-                max_attempts = max(attempt_counts) if attempt_counts else 1
-                exec_log.log_step_summary(
-                    step, total_actions, failed_actions, overall_changed,
-                    avg_attempts, max_attempts)
+                exec_log.log_step_summary(step, total_actions, failed_actions, overall_changed)
+                await _console_log(f"  Step {step}: {total_actions - failed_actions}/{total_actions} sent ok, "
+                                   f"blocked={blocked_actions}, progress={progress}")
 
-                # ── Struggle check: pause if actions are taking too many retries ──
-                if total_actions > 0:
-                    should_pause = (
-                        avg_attempts > STRUGGLE_AVG_THRESHOLD
-                        or max_attempts >= STRUGGLE_MAX_THRESHOLD
-                        or failed_actions > 0
-                    )
-                    await _console_log(
-                        f"  Step {step}: {total_actions-failed_actions}/{total_actions} succeeded, "
-                        f"avg_attempts={avg_attempts:.1f}, max={max_attempts}, failed={failed_actions}")
-                    if should_pause:
-                        reason_parts = []
-                        if avg_attempts > STRUGGLE_AVG_THRESHOLD:
-                            reason_parts.append(f"avg attempts {avg_attempts:.1f} > {STRUGGLE_AVG_THRESHOLD}")
-                        if max_attempts >= STRUGGLE_MAX_THRESHOLD:
-                            reason_parts.append(f"max attempts {max_attempts} >= {STRUGGLE_MAX_THRESHOLD}")
-                        if failed_actions > 0:
-                            reason_parts.append(f"{failed_actions} action(s) failed entirely")
-                        pause_reason = "; ".join(reason_parts)
-
-                        exec_log.log_pause_struggle(avg_attempts, max_attempts, failed_actions)
-                        await _console_log(f"  [!] Struggling: {pause_reason} — pausing agent")
-                        await emit_log(f"PAUSED: Agent is struggling ({pause_reason}). Press Continue Agent or Abort to proceed.")
-                        self.is_paused = True
-                        self._resume_event = asyncio.Event()
-                        await self._resume_event.wait()
-                        self._resume_event = None
-                        if not self.is_running:
-                            exec_log.log_abort()
-                            await _console_log("Agent aborted by user.")
+                # ── Goals, stuck handling and pauses (GCA-009/010) ──
+                if progress is None:
+                    progress_now = overall_changed
+                else:
+                    progress_now = progress
+                if _active_recipe is None and goals is not None:
+                    current_goal = goals.current()
+                    event = goals.record_step(progress_now, goal_done, escalated)
+                    if event == "done" and current_goal:
+                        await _console_log(f"  [goals] done: {current_goal.text}")
+                        await emit_log(f"STATUS: Goal done — {current_goal.text}")
+                    elif event in ("skipped", "budget") and current_goal:
+                        await _console_log(f"  [goals] skipped: {current_goal.text} ({current_goal.note})")
+                        await emit_log(f"STATUS: Goal skipped — {current_goal.text} ({current_goal.note})")
+                        findings.add({"type": "note", "severity": "medium",
+                                      "title": f"Could not complete goal: {current_goal.text}",
+                                      "details": f"Skipped after {current_goal.steps} steps: {current_goal.note}. "
+                                                 f"Last check: {check_text[:300]}",
+                                      "confirmed": False}, step, prev_step_cmds, post_step_pil)
+                    if goals.all_finished():
+                        await _console_log("  [goals] all goals finished — ending the run")
+                        await emit_log("STATUS: All goals done or skipped — ending the run")
+                        break
+                    if event == "pause":
+                        if self.unattended:
+                            # Nobody is watching a timed run: a pause would just
+                            # idle until the limit. Keep going (the stuck streak
+                            # was reset, so the stronger model gets another try).
+                            await _console_log("  [goals] long no-progress streak — unattended run, continuing")
+                            await emit_log("STATUS: Goal still stuck — trying again (unattended run, not pausing)")
+                        elif not await _pause("No progress for a long time"):
                             break
-                        exec_log.log_resume()
-                        await _console_log("Agent resumed by user.")
-                        await emit_log("STATUS: Agent resumed — continuing...")
+
+                if blocked_actions:
+                    if not await _pause("Input blocked: another window is covering the game or has focus"):
+                        break
 
                 # ── Step history for LLM context ──
-                action_summaries = []
-                for i, (c, r, *_rest) in enumerate(parsed_actions):
-                    status = "OK" if (i < len(attempt_counts) and attempt_counts[i] == 1) else "FAILED/RETRIED"
-                    action_summaries.append(f"  {c}" + (f" ({r})" if r else "") + f" → {status}")
-                outcome = "screen changed" if overall_changed else "NO EFFECT"
-                # Include first line of Lead Agent directive (usually has game ID)
+                action_summaries = [f"  {c}" + (f" ({r})" if r else "") + f" → {o}"
+                                    for c, r, _e, o in action_results]
+                outcome = "screen changed" if overall_changed else "NO VISIBLE CHANGE"
                 directive_summary = narration.split('\n')[0][:120] if narration else ""
+                check_summary = f" | check: {check_text[:120]}" if check_text else ""
                 history_entry = (
-                    f"Step {step}: {outcome} | {directive_summary}\n"
+                    f"Step {step}: {outcome}{check_summary} | {directive_summary}\n"
                     + "\n".join(action_summaries)
                 )
                 step_history.append(history_entry)
                 if len(step_history) > STEP_HISTORY_MAX:
                     step_history = step_history[-STEP_HISTORY_MAX:]
+                last_step_text = self._format_last_step(step, action_results, overall_changed, False)
+                prev_step_cmds = [c for c, _r, _e, _o in action_results]
 
                 # ── Session state checkpoint ──
                 self.session_state.save(
@@ -893,24 +1048,46 @@ class AgentLoop:
                 )
 
                 step += 1
-                
-                # Cooldown to respect rate limits
-                await _console_log("Waiting before next cycle...")
-                for _ in range(3):
-                    if not self.is_running:
-                        break
-                    await asyncio.sleep(0.5)
-                    
+
             except asyncio.CancelledError:
                 await _console_log("Agent task cancelled.")
+                break
+            except WindowNotFoundError as e:
+                await emit_log(f"ERROR: {e} — stopping. Pick the game window again and restart.")
+                await _console_log(f"  [!] Target window lost: {e} — stopping agent")
                 break
             except Exception as e:
                 await emit_log(f"ERROR: {e}")
                 await _console_log(f"Exception in agent loop: {e}")
                 await asyncio.sleep(5)
-                
+
+        # ── Keep what this run learned for the next run of the same game (GCA-021) ──
+        if notebook.notes:
+            saved = notebook.save_to_memories(self.memories, memory_game)
+            await _console_log(f"Saved {saved} of {len(notebook.notes)} notebook notes as memories for '{memory_game}'")
+
+        # ── End-of-run report (GCA-011) ──
+        if last_img_b64 and (findings.findings or (goals and goals.goals)):
+            try:
+                await _console_log("Writing the end-of-run report...")
+                await emit_log("STATUS: Writing the end-of-run report...")
+                minutes = (time.time() - run_started) / 60
+                session_data = (
+                    f"RUN STATS: {step - 1} steps in {minutes:.0f} minutes, role={role}, model={model_name}, "
+                    f"cost so far ${llm.cost.total_cost_usd:.3f}\n\n"
+                    f"GOALS:\n{goals.summary() if goals else 'none'}\n\n"
+                    f"{findings.format_for_report()}\n\n"
+                    f"{notebook.format_for_prompt()}\n\n"
+                    f"LAST NARRATION: {last_narration[:600]}\n\n"
+                    "RECENT STEP HISTORY:\n" + "\n".join(step_history))
+                report = await asyncio.to_thread(
+                    llm.write_report, last_img_b64, role, game_instructions, session_data, model_name)
+                path = findings.save_report(report, role)
+                await _console_log(f"Report saved: {path}")
+                await emit_log(f"REPORT: {path}")
+            except Exception as e:
+                await _console_log(f"  [!] Report failed: {e}")
+
         self.session_state.clear()
         self.is_running = False
         await _console_log("Agent loop terminated.")
-
-

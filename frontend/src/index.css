@@ -377,6 +377,68 @@ button {
   color: #fb923c;
 }
 
+.tag-check {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.tag-finding {
+  background: rgba(244, 114, 182, 0.2);
+  color: #f472b6;
+}
+
+.tag-goal {
+  background: rgba(52, 211, 153, 0.2);
+  color: #34d399;
+}
+
+/* ─── End-of-run report modal ─── */
+.report-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.report-modal {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  width: min(900px, 92vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+}
+
+.report-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+
+.report-path {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.report-text {
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
 /* ─── Floating stop button ─── */
 .btn-stop-float {
   position: fixed;
@@ -633,3 +695,14 @@ button {
 }
 
 .vision-status-bar { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+
+/* ─── Time limit / auto-close countdown ─── */
+.timer-banner {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #bae6fd;
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin: 10px 20px 0;
+  font-size: 0.9rem;
+}

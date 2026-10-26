@@ -9,14 +9,37 @@ Storage: Single JSON file (backend/memories.json), human-readable.
 CRUD exposed via REST API; frontend provides a management UI.
 """
 
+import difflib
 import json
 import os
+import re
 import time
 import uuid
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 
 MEMORIES_FILE = os.path.join(os.path.dirname(__file__), "memories.json")
+
+# At most this many memories go into one prompt (newest first).
+PROMPT_LIMIT = 10
+
+# A memory this similar to an existing one for the same game replaces it.
+SIMILAR_RATIO = 0.85
+
+# "(343, 91)", "at 640,451", "x=600" — pixel positions go stale as soon as a
+# window moves, so agent memories that contain them are refused.
+_COORD_RE = re.compile(r"\(\s*\d{2,4}\s*,\s*\d{2,4}\s*\)|\b\d{2,4}\s*,\s*\d{2,4}\b|\b[xy]\s*[=~]\s*\d{2,4}\b")
+_REPLACES_RE = re.compile(r"^replaces=([0-9a-f]{8})\s+", re.I)
+
+
+def game_key(name: str) -> str:
+    """Normalise a game / window title: 'Ski Resort Tycoon (DEBUG)' -> 'ski resort tycoon'."""
+    name = re.sub(r"\s*[\(\[].*?[\)\]]\s*", " ", name or "")
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def has_coordinates(text: str) -> bool:
+    return bool(_COORD_RE.search(text or ""))
 
 
 class MemoryStore:
@@ -96,37 +119,86 @@ class MemoryStore:
             return True
         return False
 
+    def _matches_game(self, m: Dict[str, Any], key: str) -> bool:
+        """Memory belongs to game `key`: tagged with it, or (older untagged
+        agent memories) names the game in its text. Untagged user memories
+        are universal."""
+        mg = game_key(m.get("game", ""))
+        if mg:
+            return bool(key) and (key in mg or mg in key)
+        if m.get("source") == "agent":
+            return bool(key) and key in m.get("content", "").lower()
+        return True
+
     def search(self, game: str = "", tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Filter memories by game and/or tags."""
         results = self._memories
         if game:
-            game_lower = game.lower()
-            results = [m for m in results
-                       if not m.get("game") or game_lower in m["game"].lower()]
+            key = game_key(game)
+            results = [m for m in results if self._matches_game(m, key)]
         if tags:
             tag_set = {t.lower() for t in tags}
             results = [m for m in results
                        if tag_set & {t.lower() for t in m.get("tags", [])}]
         return results
 
-    def format_for_prompt(self, game: str = "") -> str:
+    def save_from_agent(self, text: str, game: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """Store a memory the agent produced with `save_memory`.
+
+        - `replaces=<id> text` overwrites that memory (a correction).
+        - Text with pixel coordinates is refused.
+        - Text very similar to an existing memory of the same game replaces it.
+        Returns (outcome, memory) with outcome "added" | "replaced" | "rejected: <why>".
+        """
+        self._load()
+        text = (text or "").strip()
+        replaces = None
+        m = _REPLACES_RE.match(text)
+        if m:
+            replaces, text = m.group(1).lower(), text[m.end():].strip()
+        if not text:
+            return "rejected: empty", None
+        if has_coordinates(text):
+            return "rejected: contains pixel coordinates (save the fact, not the position)", None
+
+        key = game_key(game)
+        target = self.get(replaces) if replaces else None
+        if target is None:
+            for existing in self.search(game=game):
+                if game_key(existing.get("game", "")) != key:
+                    continue
+                if difflib.SequenceMatcher(None, existing["content"].lower(), text.lower()).ratio() >= SIMILAR_RATIO:
+                    target = existing
+                    break
+        if target is not None:
+            target["content"] = text
+            target["game"] = game
+            target["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            self._save()
+            return "replaced", target
+        return "added", self.add(content=text, game=game, tags=["agent-discovered"], source="agent")
+
+    def format_for_prompt(self, game: str = "", limit: int = PROMPT_LIMIT) -> str:
         """Format relevant memories as text for injection into the LLM prompt.
         
         Reloads from disk first so changes from the UI are picked up immediately.
-        If a game name is provided, includes:
-          - Memories tagged for that specific game
-          - Memories with no game tag (universal)
+        Includes memories for this game plus universal (untagged user) ones,
+        newest first, capped at `limit`. Agent memories holding pixel
+        coordinates are left out: they describe a window layout that is gone.
         """
         self._load()  # always read fresh — UI may have added/removed memories
-        relevant = self.search(game=game)
+        relevant = [m for m in self.search(game=game)
+                    if not (m.get("source") == "agent" and has_coordinates(m.get("content", "")))]
+        relevant.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+        relevant = relevant[:limit]
         if not relevant:
             return ""
 
         lines = ["=== AGENT MEMORIES (knowledge from prior sessions) ==="]
         for m in relevant:
             game_tag = f" [{m['game']}]" if m.get("game") else ""
-            tag_str = f" (tags: {', '.join(m['tags'])})" if m.get("tags") else ""
-            lines.append(f"• {m['content']}{game_tag}{tag_str}")
+            lines.append(f"• [{m['id']}] {m['content']}{game_tag}")
         lines.append("=== END MEMORIES ===")
-        lines.append("Use these memories to inform your decisions. If you discover new useful information (hotkeys, strategies, mechanics), you can save it with the save_memory command.")
+        lines.append("Use these memories to inform your decisions. Save new facts (hotkeys, mechanics, strategies) with save_memory; "
+                     "correct a wrong one with save_memory replaces=<id> <corrected text>.")
         return "\n".join(lines)

@@ -12,3 +12,4 @@ websockets
 requests
 mcp
 pynput
+anthropic>=2.3
